@@ -17,6 +17,7 @@
   --radius-sm: 8px;
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-top: env(safe-area-inset-top, 0px);
+  --restbar-h: 0px;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -45,10 +46,11 @@ button {
 }
 
 #app {
-  padding: calc(12px + var(--safe-top)) 16px calc(88px + var(--safe-bottom));
+  padding: calc(12px + var(--safe-top) + var(--restbar-h, 0px)) 16px calc(88px + var(--safe-bottom));
   max-width: 560px;
   margin: 0 auto;
   min-height: 100vh;
+  transition: padding-top 0.15s ease;
 }
 
 h1 { font-size: 22px; font-weight: 600; margin: 4px 0 16px; }
@@ -123,6 +125,14 @@ h3 { font-size: 14px; font-weight: 600; margin: 0 0 8px; color: var(--text-2); }
   font-size: 13px;
   font-weight: 600;
   background: var(--surface);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.icon-btn-danger {
+  color: var(--danger);
+  border-color: var(--danger-bg);
+  background: var(--danger-bg);
 }
 
 .fab-add {
@@ -273,8 +283,28 @@ input:focus, select:focus, textarea:focus {
 .set-prev { font-size: 12px; color: var(--text-3); }
 
 .exercise-block { margin-bottom: 20px; }
-.exercise-block .ex-title { font-size: 16px; font-weight: 600; margin-bottom: 2px; }
+.exercise-block .ex-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.exercise-block .ex-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
 .exercise-block .ex-rest { font-size: 12px; color: var(--text-3); margin-bottom: 8px; }
+.exercise-block .ex-rest-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
 
 .empty-state {
   text-align: center;

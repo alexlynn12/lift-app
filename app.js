@@ -192,8 +192,12 @@
       const remaining = (restTimer.endTime - Date.now()) / 1000;
       bar.classList.remove("hidden");
       timeEl.textContent = fmtTime(remaining);
+      // Reserve space at the top of #app equal to the bar's real height so it
+      // never overlaps the topbar (e.g. the Finish button) while resting.
+      document.documentElement.style.setProperty("--restbar-h", bar.offsetHeight + "px");
     } else {
       bar.classList.add("hidden");
+      document.documentElement.style.setProperty("--restbar-h", "0px");
     }
   }
 
@@ -308,16 +312,19 @@
     document.getElementById("tabbar").style.display = ["home", "history", "exercises", "settings"].includes(route) ? "flex" : "none";
 
     switch (route) {
-      case "home": return renderHome();
-      case "history": return renderHistory(params);
-      case "exercises": return renderExercises(params);
-      case "settings": return renderSettings();
-      case "routine-edit": return renderRoutineEdit(params);
-      case "workout-active": return renderWorkoutActive();
-      case "workout-detail": return renderWorkoutDetail(params);
-      case "exercise-detail": return renderExerciseDetail(params);
-      default: return renderHome();
+      case "home": renderHome(); break;
+      case "history": renderHistory(params); break;
+      case "exercises": renderExercises(params); break;
+      case "settings": renderSettings(); break;
+      case "routine-edit": renderRoutineEdit(params); break;
+      case "workout-active": renderWorkoutActive(); break;
+      case "workout-detail": renderWorkoutDetail(params); break;
+      case "exercise-detail": renderExerciseDetail(params); break;
+      default: renderHome(); break;
     }
+    // Keep the rest-timer bar (and the #app top padding that makes room for
+    // it) in sync no matter which screen we just rendered.
+    renderRestBar();
   }
 
   function renderHome() {
@@ -395,12 +402,15 @@
       }
       body.innerHTML = state.workouts.map((w) => `
         <div class="card card-tap" data-action="view-workout" data-id="${w.id}">
-          <div class="row">
-            <div>
+          <div class="row" style="gap:12px;">
+            <div style="min-width:0; flex:1;">
               <div style="font-weight:600;">${escapeHtml(w.name)}</div>
               <div class="small muted">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}</div>
             </div>
-            ${w.prCount ? `<span class="badge badge-success">${w.prCount} PR${w.prCount > 1 ? "s" : ""}</span>` : ""}
+            <div class="row-gap">
+              ${w.prCount ? `<span class="badge badge-success">${w.prCount} PR${w.prCount > 1 ? "s" : ""}</span>` : ""}
+              <button class="icon-btn icon-btn-danger" data-action="delete-workout" data-id="${w.id}" aria-label="Delete workout">Delete</button>
+            </div>
           </div>
         </div>
       `).join("");
@@ -652,11 +662,11 @@
     const u = unitLabel();
     return `
       <div class="exercise-block">
-        <div class="row">
+        <div class="ex-header">
           <div class="ex-title">${escapeHtml(ex.name)}</div>
           <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
         </div>
-        <div class="row" style="margin-bottom:8px;">
+        <div class="ex-rest-row">
           <div class="ex-rest">Rest between sets</div>
           <div class="row-gap">
             <button class="icon-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="-15">-15</button>
@@ -697,6 +707,7 @@
           </table>
         </div>
       `).join("")}
+      <button class="btn btn-danger" style="margin-top:8px;" data-action="delete-workout" data-id="${w.id}">Delete workout</button>
     `;
   }
 
@@ -726,6 +737,7 @@
         break;
       }
       case "view-workout": navigate("workout-detail", { id: t.dataset.id }); break;
+      case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
       case "history-tab": navigate("history", { tab: t.dataset.tab }); break;
       case "new-exercise": handleNewExercise(); break;
@@ -984,6 +996,19 @@
     await DB.delete("routines", id);
     state.routines = state.routines.filter((r) => r.id !== id);
     navigate("home");
+  }
+
+  async function deleteWorkout(id) {
+    if (!confirm("Delete this workout? This can't be undone.")) return;
+    await DB.delete("workouts", id);
+    state.workouts = state.workouts.filter((w) => w.id !== id);
+    showToast("Workout deleted");
+    const { route, params } = parseHash();
+    if (route === "workout-detail" && params.id === id) {
+      navigate("history", { tab: "workouts" });
+    } else {
+      render();
+    }
   }
 
   async function exportData() {
