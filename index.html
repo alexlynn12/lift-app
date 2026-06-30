@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no" />
+<title>Lift</title>
+<meta name="theme-color" content="#fafaf8" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Lift" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div id="restbar" class="restbar hidden">
+  <div class="restbar-inner">
+    <span class="restbar-label">Rest</span>
+    <span class="restbar-time" id="restbar-time">0:00</span>
+    <div class="restbar-actions">
+      <button id="rest-minus" class="icon-btn" aria-label="Subtract 15 seconds">-15</button>
+      <button id="rest-plus" class="icon-btn" aria-label="Add 15 seconds">+15</button>
+      <button id="rest-skip" class="icon-btn" aria-label="Skip rest">Skip</button>
+    </div>
+  </div>
+</div>
+
+<main id="app"></main>
+
+<nav id="tabbar" class="tabbar">
+  <button class="tab" data-route="home">
+    <span class="tab-icon">&#9679;</span>
+    <span class="tab-label">Home</span>
+  </button>
+  <button class="tab" data-route="history">
+    <span class="tab-icon">&#9679;</span>
+    <span class="tab-label">History</span>
+  </button>
+  <button class="tab" data-route="exercises">
+    <span class="tab-icon">&#9679;</span>
+    <span class="tab-label">Exercises</span>
+  </button>
+  <button class="tab" data-route="settings">
+    <span class="tab-icon">&#9679;</span>
+    <span class="tab-label">Settings</span>
+  </button>
+</nav>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="db.js"></script>
+<script src="exercises-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
