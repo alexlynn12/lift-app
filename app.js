@@ -822,29 +822,152 @@
   }
 
   function addExerciseToRoutineDraft() {
-    const list = allExercises().sort((a, b) => a.name.localeCompare(b.name));
-    const name = prompt("Type exercise name to add:\n\n" + list.slice(0, 30).map((e) => e.name).join(", ") + (list.length > 30 ? ", ..." : ""));
-    if (!name) return;
-    const match = list.find((e) => e.name.toLowerCase() === name.toLowerCase()) || list.find((e) => e.name.toLowerCase().includes(name.toLowerCase()));
-    if (!match) { showToast("No matching exercise found"); return; }
-    renderRoutineEdit._draft.exercises.push({ exerciseId: match.id, targetSets: 3, restSec: state.settings.defaultRestSec });
-    render();
+    openExercisePicker("routine");
   }
 
   function addExerciseToActiveWorkout() {
-    const list = allExercises().sort((a, b) => a.name.localeCompare(b.name));
-    const name = prompt("Type exercise name to add:\n\n" + list.slice(0, 30).map((e) => e.name).join(", ") + (list.length > 30 ? ", ..." : ""));
-    if (!name) return;
-    const match = list.find((e) => e.name.toLowerCase() === name.toLowerCase()) || list.find((e) => e.name.toLowerCase().includes(name.toLowerCase()));
-    if (!match) { showToast("No matching exercise found"); return; }
-    state.activeWorkout.exercises.push({
-      exerciseId: match.id,
-      name: match.name,
-      restSec: state.settings.defaultRestSec,
-      sets: [{ weight: "", reps: "", completed: false }, { weight: "", reps: "", completed: false }, { weight: "", reps: "", completed: false }],
-    });
-    saveActiveWorkout(); render();
+    openExercisePicker("workout");
   }
+
+  // ---------- Exercise picker ----------
+  const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  let pickerContext = null; // "routine" | "workout"
+
+  function openExercisePicker(context) {
+    pickerContext = context;
+    const overlay = document.getElementById("exercise-picker");
+    overlay.classList.remove("hidden");
+    document.getElementById("picker-search").value = "";
+    populatePickerFilters();
+    renderPickerList();
+    requestAnimationFrame(() => overlay.classList.add("open"));
+  }
+
+  function closeExercisePicker() {
+    const overlay = document.getElementById("exercise-picker");
+    overlay.classList.remove("open");
+    setTimeout(() => overlay.classList.add("hidden"), 220);
+    pickerContext = null;
+  }
+
+  function populatePickerFilters() {
+    const muscles = [...new Set(allExercises().map((e) => e.muscle))].sort();
+    const equipment = [...new Set(allExercises().map((e) => e.equipment))].sort();
+    const mSel = document.getElementById("picker-filter-muscle");
+    const eSel = document.getElementById("picker-filter-equipment");
+    mSel.innerHTML = `<option value="any">Any body part</option>` + muscles.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
+    eSel.innerHTML = `<option value="any">Any category</option>` + equipment.map((e) => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join("");
+  }
+
+  function lastPerformedSummary(exerciseId) {
+    for (const w of state.workouts) {
+      const ex = w.exercises.find((x) => x.exerciseId === exerciseId);
+      if (ex) {
+        const completed = ex.sets.filter((s) => s.completed);
+        if (completed.length) {
+          const best = completed.reduce((a, b) => ((b.weight || 0) > (a.weight || 0) ? b : a));
+          return `${weightToDisplay(best.weight)} ${unitLabel()} × ${best.reps}`;
+        }
+      }
+    }
+    return null;
+  }
+
+  function equipmentIcon(equipment) {
+    const icons = {
+      Barbell: `<circle cx="5" cy="12" r="2.6"/><line x1="7.6" y1="12" x2="16.4" y2="12"/><circle cx="19" cy="12" r="2.6"/>`,
+      Dumbbell: `<rect x="3" y="9" width="3" height="6" rx="1"/><rect x="18" y="9" width="3" height="6" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/>`,
+      Cable: `<circle cx="12" cy="6" r="2.2"/><line x1="12" y1="8.2" x2="12" y2="14"/><line x1="12" y1="14" x2="7" y2="20"/><line x1="12" y1="14" x2="17" y2="20"/>`,
+      Machine: `<rect x="5" y="4" width="14" height="6" rx="1.5"/><line x1="7" y1="10" x2="7" y2="20"/><line x1="17" y1="10" x2="17" y2="20"/>`,
+      Bodyweight: `<circle cx="12" cy="4.5" r="2.2"/><line x1="12" y1="6.7" x2="12" y2="14"/><line x1="12" y1="9" x2="7" y2="12"/><line x1="12" y1="9" x2="17" y2="12"/><line x1="12" y1="14" x2="8" y2="20"/><line x1="12" y1="14" x2="16" y2="20"/>`,
+    };
+    const inner = icons[equipment] || `<line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="6.3" y1="6.3" x2="17.7" y2="17.7"/><line x1="17.7" y1="6.3" x2="6.3" y2="17.7"/>`;
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+  }
+
+  function pickerRowHtml(ex) {
+    const summary = lastPerformedSummary(ex.id);
+    return `
+      <button class="picker-row" data-action="picker-select" data-id="${ex.id}">
+        <span class="picker-thumb">${equipmentIcon(ex.equipment)}</span>
+        <span class="picker-row-text">
+          <span class="picker-row-name">${escapeHtml(ex.name)}</span>
+          <span class="picker-row-sub">${escapeHtml(ex.muscle)}</span>
+        </span>
+        ${summary ? `<span class="picker-row-last">${summary}</span>` : ""}
+      </button>`;
+  }
+
+  function renderPickerList() {
+    const search = (document.getElementById("picker-search").value || "").toLowerCase();
+    const muscleFilter = document.getElementById("picker-filter-muscle").value || "any";
+    const equipFilter = document.getElementById("picker-filter-equipment").value || "any";
+
+    let list = allExercises().filter((e) => {
+      if (search && !e.name.toLowerCase().includes(search) && !e.muscle.toLowerCase().includes(search)) return false;
+      if (muscleFilter !== "any" && e.muscle !== muscleFilter) return false;
+      if (equipFilter !== "any" && e.equipment !== equipFilter) return false;
+      return true;
+    }).sort((a, b) => a.name.localeCompare(b.name));
+
+    const groups = {};
+    list.forEach((e) => {
+      const L = /[A-Za-z]/.test(e.name[0]) ? e.name[0].toUpperCase() : "#";
+      (groups[L] = groups[L] || []).push(e);
+    });
+    const letters = Object.keys(groups).sort();
+
+    const listEl = document.getElementById("picker-list");
+    listEl.innerHTML = letters.length
+      ? letters.map((L) => `
+        <div class="picker-letter-heading" id="picker-letter-${L}">${L}</div>
+        ${groups[L].map((e) => pickerRowHtml(e)).join("")}
+      `).join("")
+      : `<div class="empty-state"><div class="big">No matches</div>Try a different search or filter.</div>`;
+
+    const idxEl = document.getElementById("picker-index");
+    idxEl.innerHTML = ALPHABET.map((L) =>
+      `<button class="picker-index-letter" data-letter="${L}" ${letters.includes(L) ? "" : "disabled"}>${L}</button>`
+    ).join("");
+  }
+
+  function confirmPickerSelection(exerciseId) {
+    const ex = exerciseById(exerciseId);
+    if (!ex) return;
+    if (pickerContext === "routine") {
+      renderRoutineEdit._draft.exercises.push({ exerciseId: ex.id, targetSets: 3, restSec: state.settings.defaultRestSec });
+      closeExercisePicker();
+      render();
+    } else if (pickerContext === "workout") {
+      state.activeWorkout.exercises.push({
+        exerciseId: ex.id,
+        name: ex.name,
+        restSec: state.settings.defaultRestSec,
+        sets: [{ weight: "", reps: "", completed: false }, { weight: "", reps: "", completed: false }, { weight: "", reps: "", completed: false }],
+      });
+      saveActiveWorkout();
+      closeExercisePicker();
+      render();
+    } else {
+      closeExercisePicker();
+    }
+  }
+
+  document.getElementById("picker-close").addEventListener("click", closeExercisePicker);
+  document.getElementById("picker-search").addEventListener("input", renderPickerList);
+  document.getElementById("picker-filter-muscle").addEventListener("change", renderPickerList);
+  document.getElementById("picker-filter-equipment").addEventListener("change", renderPickerList);
+  document.getElementById("picker-list").addEventListener("click", (e) => {
+    const row = e.target.closest('[data-action="picker-select"]');
+    if (!row) return;
+    confirmPickerSelection(row.dataset.id);
+  });
+  document.getElementById("picker-index").addEventListener("click", (e) => {
+    const btn = e.target.closest(".picker-index-letter");
+    if (!btn || btn.disabled) return;
+    const target = document.getElementById("picker-letter-" + btn.dataset.letter);
+    if (target) target.scrollIntoView({ block: "start" });
+  });
 
   async function saveRoutineDraft() {
     const draft = renderRoutineEdit._draft;

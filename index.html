@@ -6,7 +6,7 @@
 <title>Lift</title>
 <meta name="theme-color" content="#fafaf8" />
 <link rel="manifest" href="manifest.json" />
-<link rel="apple-touch-icon" href="icons/icon-192.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="Lift" />
@@ -48,6 +48,26 @@
 </nav>
 
 <div id="toast" class="toast hidden"></div>
+
+<div id="exercise-picker" class="picker-overlay hidden">
+  <div class="picker-handle"></div>
+  <div class="picker-topbar">
+    <button class="back-btn" id="picker-close">Cancel</button>
+    <span class="picker-title">Add exercise</span>
+    <span style="width:46px;"></span>
+  </div>
+  <div class="picker-search-row">
+    <input type="text" id="picker-search" placeholder="Search exercises" />
+  </div>
+  <div class="picker-filter-row">
+    <select id="picker-filter-muscle"></select>
+    <select id="picker-filter-equipment"></select>
+  </div>
+  <div class="picker-body">
+    <div class="picker-list" id="picker-list"></div>
+    <div class="picker-index" id="picker-index"></div>
+  </div>
+</div>
 
 <script src="db.js"></script>
 <script src="exercises-data.js"></script>
