@@ -10,9 +10,19 @@
     routines: [],
     workouts: [],
     activeWorkout: null, // { id, name, startedAt, exercises: [{exerciseId, name, restSec, sets:[{weight,reps,completed,isWarmup}]}] }
+    pushSubscribed: false,
   };
 
-  let restTimer = { endTime: null, raf: null, timeoutId: null, exerciseName: "" };
+  let restTimer = { endTime: null, raf: null, timeoutId: null, exerciseName: "", id: null };
+
+  // Public VAPID key for the rest-timer push backend (see push-worker/ in
+  // this repo). Safe to embed — it's the public half of the key pair, not
+  // the secret used to sign messages. PUSH_API_BASE is filled in once the
+  // Cloudflare Worker is deployed; until then, scheduling/cancelling a
+  // server push is a no-op and the app falls back to the in-app beep/
+  // vibration/banner only (no lock-screen alert).
+  const VAPID_PUBLIC_KEY = "BPeyEp760rhvieDGW6iFs-jBrm3l2m2Zi6dErniXYYcgh8ZKk1p37O0jfPUW88vGtGp3JWlj8zIQh5bDGwqsipc";
+  const PUSH_API_BASE = "";
 
   const appEl = document.getElementById("app");
   const toastEl = document.getElementById("toast");
@@ -44,8 +54,8 @@
     if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
   }
 
-  confirmCancelBtn.addEventListener("click", () => { vibrateTap(); closeConfirm(false); });
-  confirmOkBtn.addEventListener("click", () => { vibrateTap(); closeConfirm(true); });
+  confirmCancelBtn.addEventListener("click", () => { tapFeedback(confirmCancelBtn); closeConfirm(false); });
+  confirmOkBtn.addEventListener("click", () => { tapFeedback(confirmOkBtn); closeConfirm(true); });
 
   // ---------- Per-exercise "..." options menu (routine editor) ----------
   // Lets a routine exercise carry a free-text note (RPE, rep range, tempo,
@@ -91,12 +101,12 @@
     exerciseMenuIndex = null;
   }
 
-  exerciseMenuCloseBtn.addEventListener("click", () => { vibrateTap(); closeExerciseMenu(); });
+  exerciseMenuCloseBtn.addEventListener("click", () => { tapFeedback(exerciseMenuCloseBtn); closeExerciseMenu(); });
 
   exerciseMenuActionsEl.addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
     if (!t) return;
-    vibrateTap();
+    tapFeedback(t);
     const target = getExerciseMenuTarget();
     if (!target) { closeExerciseMenu(); return; }
     const { ex, persist } = target;
@@ -117,7 +127,7 @@
   });
 
   menuNoteSaveBtn.addEventListener("click", () => {
-    vibrateTap();
+    tapFeedback(menuNoteSaveBtn, "primary");
     const target = getExerciseMenuTarget();
     if (target) {
       target.ex.note = menuNoteInputEl.value.trim();
@@ -221,12 +231,13 @@
 
   // ---------- Persistence ----------
   async function loadAll() {
-    const [settings, customExercises, routines, workouts, activeWorkout] = await Promise.all([
+    const [settings, customExercises, routines, workouts, activeWorkout, pushSubscription] = await Promise.all([
       DB.kvGet("settings", null),
       DB.getAll("exercises"),
       DB.getAll("routines"),
       DB.getAll("workouts"),
       DB.kvGet("activeWorkout", null),
+      DB.kvGet("pushSubscription", null),
     ]);
     // Merge (not replace) so new setting fields added after someone's first
     // install — like bodyWeightLb — still get their default instead of
@@ -236,6 +247,7 @@
     state.routines = routines || [];
     state.workouts = (workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     state.activeWorkout = activeWorkout;
+    state.pushSubscribed = !!pushSubscription;
 
     await backfillEffortScores();
 
@@ -243,6 +255,7 @@
     if (savedTimer && savedTimer.endTime > Date.now()) {
       restTimer.endTime = savedTimer.endTime;
       restTimer.exerciseName = savedTimer.exerciseName;
+      restTimer.id = savedTimer.id || null;
       startTimerLoop();
     }
   }
@@ -250,7 +263,7 @@
   function saveSettings() { DB.kvSet("settings", state.settings); }
   function saveActiveWorkout() { DB.kvSet("activeWorkout", state.activeWorkout); }
   function saveRestTimer() {
-    DB.kvSet("restTimer", restTimer.endTime ? { endTime: restTimer.endTime, exerciseName: restTimer.exerciseName } : null);
+    DB.kvSet("restTimer", restTimer.endTime ? { endTime: restTimer.endTime, exerciseName: restTimer.exerciseName, id: restTimer.id } : null);
   }
 
   // ---------- Router ----------
@@ -277,28 +290,166 @@
     }
   }
 
-  // ---------- Notifications ----------
+  // ---------- Tap sounds ----------
+  // One shared AudioContext, reused for every tap — creating a fresh one
+  // per click (like the rest-timer beep() does, since that only fires
+  // rarely) would be wasteful for something that fires on every button
+  // press. Kept lazy since AudioContext can't be created before a user
+  // gesture on most browsers anyway.
+  let tapAudioCtx = null;
+  function getTapAudioCtx() {
+    if (!tapAudioCtx) {
+      try { tapAudioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
+    }
+    if (tapAudioCtx.state === "suspended") tapAudioCtx.resume().catch(() => {});
+    return tapAudioCtx;
+  }
+
+  // A short, soft synthesized tone — a downward pitch glide reads as a
+  // gentle "thock" rather than a harsh click. Kept quiet (peak gains below)
+  // since this fires on nearly every tap.
+  function playTone(freqStart, freqEnd, duration, peakGain, type) {
+    const ctx = getTapAudioCtx();
+    if (!ctx) return;
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freqStart, ctx.currentTime);
+      o.frequency.exponentialRampToValueAtTime(freqEnd, ctx.currentTime + duration);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(peakGain, ctx.currentTime + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration);
+      o.connect(g).connect(ctx.destination);
+      o.start();
+      o.stop(ctx.currentTime + duration + 0.02);
+    } catch (e) { /* audio unavailable */ }
+  }
+
+  // A handful of distinct-but-related "voices" so different kinds of
+  // actions feel different without any one of them standing out: primary/
+  // confirming actions get a rounder, slightly warmer thock; destructive
+  // actions get a lower, duller thud (weightier, not alarming); toggles and
+  // tab switches get a light, brief tick; everything else gets a small
+  // neutral click.
+  function playTapSound(kind) {
+    if (state.settings.soundEnabled === false) return;
+    switch (kind) {
+      case "primary": playTone(620, 380, 0.075, 0.16, "sine"); break;
+      case "danger": playTone(260, 170, 0.09, 0.15, "triangle"); break;
+      case "toggle": playTone(1500, 1300, 0.032, 0.09, "sine"); break;
+      default: playTone(950, 700, 0.045, 0.11, "sine"); break;
+    }
+  }
+
+  // Classifies a clicked element into one of the voices above, based on
+  // the same CSS classes already used for visual styling — no separate
+  // bookkeeping needed per button.
+  function classifyTapSound(el) {
+    if (!el) return "default";
+    if (el.classList.contains("btn-danger") || el.classList.contains("icon-btn-danger") || el.classList.contains("danger")) return "danger";
+    if (el.classList.contains("btn-primary") || el.classList.contains("btn-accent")) return "primary";
+    if (el.classList.contains("tab") || el.closest(".segmented")) return "toggle";
+    return "default";
+  }
+
+  function tapFeedback(el, kindOverride) {
+    vibrateTap();
+    playTapSound(kindOverride || classifyTapSound(el));
+  }
+
+  // ---------- Notifications (real push, works locked/backgrounded) ----------
+  // Rest-timer alerts used to rely on the app's own JS timer calling the
+  // Notification API directly — which only ever runs while the tab is in
+  // the foreground, so nothing showed up once the phone was locked or the
+  // app was backgrounded. Real lock-screen delivery requires an actual Web
+  // Push message sent by a server at the right time (see push-worker/ in
+  // this repo); this app subscribes to that here and schedules/cancels a
+  // push whenever a rest timer starts/stops.
   function notificationStatus() {
-    if (!("Notification" in window)) return { label: "Not supported", cls: "badge-muted", canRequest: false };
-    if (Notification.permission === "granted") return { label: "Enabled", cls: "badge-success", canRequest: false };
+    if (!("Notification" in window) || !("PushManager" in window)) return { label: "Not supported", cls: "badge-muted", canRequest: false };
     if (Notification.permission === "denied") return { label: "Blocked", cls: "badge-muted", canRequest: false };
+    if (Notification.permission === "granted" && state.pushSubscribed) return { label: "Enabled", cls: "badge-success", canRequest: false };
     return { label: "Not enabled", cls: "badge-muted", canRequest: true };
   }
 
-  async function requestNotificationPermission() {
-    if (!("Notification" in window)) { showToast("Notifications aren't supported in this browser"); return; }
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  async function enablePushNotifications() {
+    if (!("Notification" in window) || !("PushManager" in window) || !("serviceWorker" in navigator)) {
+      showToast("Notifications aren't supported in this browser");
+      return;
+    }
     try {
       const perm = await Notification.requestPermission();
-      if (perm === "granted") showToast("Notifications enabled");
-      else if (perm === "denied") showToast("Blocked — enable in Settings > Notifications");
-    } catch (e) { /* ignore */ }
+      if (perm !== "granted") {
+        showToast(perm === "denied" ? "Blocked — enable in Settings > Notifications" : "Notifications not enabled");
+        render();
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
+      }
+      await DB.kvSet("pushSubscription", sub.toJSON());
+      state.pushSubscribed = true;
+      showToast("Notifications enabled");
+    } catch (e) {
+      showToast("Couldn't enable notifications");
+    }
     render();
   }
 
-  async function notifyRestDone(exerciseName) {
+  async function getPushSubscription() {
+    return DB.kvGet("pushSubscription", null);
+  }
+
+  // Best-effort: if PUSH_API_BASE isn't configured yet, or there's no
+  // subscription, or the network call fails, these silently no-op — the
+  // in-app beep/vibration/banner still work regardless.
+  async function scheduleServerPush(id, fireInSeconds, title, body, tag) {
+    if (!PUSH_API_BASE || !id) return;
+    try {
+      const subscription = await getPushSubscription();
+      if (!subscription) return;
+      await fetch(`${PUSH_API_BASE}/schedule`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, subscription, fireInSeconds, title, message: body, tag }),
+      });
+    } catch (e) { /* best-effort */ }
+  }
+
+  async function cancelServerPush(id) {
+    if (!PUSH_API_BASE || !id) return;
+    try {
+      await fetch(`${PUSH_API_BASE}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+    } catch (e) { /* best-effort */ }
+  }
+
+  function newTimerId() {
+    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  // Foreground-only fallback notification, used only while PUSH_API_BASE
+  // isn't configured (no backend deployed yet). Once a backend is wired up,
+  // the scheduled server push covers this same moment (and the locked/
+  // backgrounded case too), so this stops being called — see startTimerLoop.
+  async function notifyRestDoneLocally(exerciseName) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
-    const title = "Rest complete";
-    const body = exerciseName ? `Time for your next set — ${exerciseName}` : "Time for your next set";
+    const { title, body } = restNotificationCopy(exerciseName);
     try {
       if ("serviceWorker" in navigator) {
         const reg = await navigator.serviceWorker.ready;
@@ -327,11 +478,21 @@
     if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
   }
 
+  function restNotificationCopy(exerciseName) {
+    return {
+      title: "Rest complete",
+      body: exerciseName ? `Time for your next set — ${exerciseName}` : "Time for your next set",
+    };
+  }
+
   function startRest(seconds, exerciseName) {
     restTimer.endTime = Date.now() + seconds * 1000;
     restTimer.exerciseName = exerciseName;
+    restTimer.id = newTimerId();
     saveRestTimer();
     startTimerLoop();
+    const { title, body } = restNotificationCopy(exerciseName);
+    scheduleServerPush(restTimer.id, seconds, title, body, "rest-timer");
   }
 
   function adjustRest(deltaSec) {
@@ -340,6 +501,15 @@
     if (restTimer.endTime < Date.now()) restTimer.endTime = Date.now();
     saveRestTimer();
     renderRestBar();
+    // The old scheduled push is now wrong (fires at the old time) — cancel
+    // it and schedule a fresh one for the new remaining duration.
+    const oldId = restTimer.id;
+    restTimer.id = newTimerId();
+    saveRestTimer();
+    cancelServerPush(oldId);
+    const remaining = Math.max(0, (restTimer.endTime - Date.now()) / 1000);
+    const { title, body } = restNotificationCopy(restTimer.exerciseName);
+    scheduleServerPush(restTimer.id, remaining, title, body, "rest-timer");
   }
 
   // Stops the countdown loop dead, right now — cancels both the pending
@@ -355,7 +525,9 @@
   }
 
   function skipRest() {
+    cancelServerPush(restTimer.id);
     restTimer.endTime = null;
+    restTimer.id = null;
     saveRestTimer();
     stopTimerLoop();
     renderRestBar();
@@ -368,8 +540,15 @@
       const remaining = (restTimer.endTime - Date.now()) / 1000;
       if (remaining <= 0) {
         beep();
-        notifyRestDone(restTimer.exerciseName);
+        // The scheduled server push (see startRest) is what shows a real
+        // system/lock-screen notification, whether the app is open or not —
+        // but that only works once PUSH_API_BASE points at a deployed
+        // backend. Until then, fall back to the old foreground-only local
+        // notification so this doesn't regress to "nothing at all" while
+        // the app is open and visible.
+        if (!PUSH_API_BASE) notifyRestDoneLocally(restTimer.exerciseName);
         restTimer.endTime = null;
+        restTimer.id = null;
         saveRestTimer();
         renderRestBar();
         return;
@@ -398,9 +577,9 @@
     }
   }
 
-  document.getElementById("rest-minus").addEventListener("click", () => { vibrateTap(); adjustRest(-15); });
-  document.getElementById("rest-plus").addEventListener("click", () => { vibrateTap(); adjustRest(15); });
-  document.getElementById("rest-skip").addEventListener("click", () => { vibrateTap(); skipRest(); });
+  document.getElementById("rest-minus").addEventListener("click", () => { tapFeedback(null, "toggle"); adjustRest(-15); });
+  document.getElementById("rest-plus").addEventListener("click", () => { tapFeedback(null, "toggle"); adjustRest(15); });
+  document.getElementById("rest-skip").addEventListener("click", () => { tapFeedback(null); skipRest(); });
 
   // ---------- Set / workout helpers ----------
   function lastCompletedWorkoutFor(exerciseId, excludeWorkoutId) {
@@ -1300,7 +1479,7 @@
             <span class="badge ${notif.cls}">${notif.label}</span>
           </div>
           ${notif.canRequest ? `<button class="btn" style="margin-top:12px;" data-action="enable-notifications">Enable notifications</button>` : ""}
-          <div class="tiny muted" style="margin-top:8px;">On iPhone, you need to add Just Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
+          <div class="tiny muted" style="margin-top:8px;">Shows up even if your phone is locked or Just Lift isn't open. On iPhone, you need to add Just Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
         </div>
       </div>
 
@@ -1643,7 +1822,7 @@
     if (!t) return;
     const action = t.dataset.action;
     const { route } = parseHash();
-    vibrateTap();
+    tapFeedback(t);
 
     switch (action) {
       case "back": history.back(); break;
@@ -1680,7 +1859,7 @@
         state.settings.hapticsEnabled = t.dataset.value === "on";
         saveSettings(); render();
         break;
-      case "enable-notifications": requestNotificationPermission(); break;
+      case "enable-notifications": enablePushNotifications(); break;
       case "export-data": exportData(); break;
       case "import-data": document.getElementById("import-file-input").click(); break;
       case "reset-data": resetData(); break;
@@ -1988,11 +2167,11 @@
     navigate("exercise-detail", { id: ex.id });
   }
 
-  document.getElementById("new-exercise-cancel").addEventListener("click", () => { vibrateTap(); closeNewExerciseModal(); });
+  document.getElementById("new-exercise-cancel").addEventListener("click", () => { tapFeedback(null); closeNewExerciseModal(); });
   document.getElementById("new-exercise-body").addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
     if (!t) return;
-    vibrateTap();
+    tapFeedback(t);
     if (t.dataset.action === "new-ex-set-muscle") {
       libraryExerciseDraft.muscle = t.dataset.value;
       renderNewExerciseForm();
@@ -2121,7 +2300,7 @@
   }
 
   document.getElementById("picker-close").addEventListener("click", () => {
-    vibrateTap();
+    tapFeedback(null);
     if (pickerViewMode === "create") showPickerListView();
     else closeExercisePicker();
   });
@@ -2131,7 +2310,7 @@
   document.getElementById("picker-list").addEventListener("click", (e) => {
     const row = e.target.closest('[data-action="picker-select"]');
     if (!row) return;
-    vibrateTap();
+    tapFeedback(row);
     confirmPickerSelection(row.dataset.id);
   });
   document.getElementById("picker-index").addEventListener("click", (e) => {
@@ -2143,13 +2322,13 @@
   document.getElementById("picker-create-row").addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="open-create-exercise"]');
     if (!btn) return;
-    vibrateTap();
+    tapFeedback(btn, "primary");
     openCreateExercise();
   });
   document.getElementById("picker-create-body").addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
     if (!t) return;
-    vibrateTap();
+    tapFeedback(t);
     const action = t.dataset.action;
     if (action === "create-ex-set-muscle") {
       newExerciseDraft.muscle = t.dataset.value;
@@ -2261,7 +2440,7 @@
 
   // ---------- Init ----------
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => { vibrateTap(); navigate(tab.dataset.route); });
+    tab.addEventListener("click", () => { tapFeedback(tab, "toggle"); navigate(tab.dataset.route); });
   });
 
   (async function init() {
