@@ -509,7 +509,7 @@
     // toggling a set checkbox, which call render() without touching the
     // hash and would otherwise flash/jump distractingly on every tap.
     if (location.hash !== lastRenderedHash) {
-      window.scrollTo(0, 0);
+      appEl.scrollTop = 0;
       appEl.classList.remove("app-enter");
       void appEl.offsetWidth;
       appEl.classList.add("app-enter");
@@ -856,17 +856,9 @@
                 <div class="ex-title">${ex ? escapeHtml(ex.name) : "Unknown"}</div>
                 ${re.note ? `<div class="ex-note">${escapeHtml(re.note)}</div>` : ""}
               </div>
-              <div class="row-gap">
-                <button class="icon-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">⋯</button>
+              <div class="ex-header-actions">
+                <button class="ex-menu-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">⋯</button>
                 <button class="icon-btn" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
-              </div>
-            </div>
-            <div class="ex-rest-row">
-              <div class="ex-rest">Rest between sets</div>
-              <div class="row-gap">
-                <button class="icon-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="-15">-15</button>
-                <span class="tiny" style="font-weight:600; min-width:36px; text-align:center;">${fmtTime(re.restSec)}</span>
-                <button class="icon-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="15">+15</button>
               </div>
             </div>
             <table class="set-table">
@@ -880,6 +872,13 @@
                   <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="routine-set-reps" data-index="${i}" data-setidx="${si}" value="${s.reps === "" || s.reps == null ? "" : s.reps}" placeholder="0" /></td>
                   <td><button class="set-remove-btn" data-action="remove-routine-set" data-index="${i}" data-setidx="${si}" aria-label="Remove set">×</button></td>
                 </tr>
+                <tr class="rest-divider-row"><td colspan="4">
+                  <div class="rest-divider">
+                    <button class="rest-divider-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="-15" aria-label="Decrease rest 15 seconds">−15</button>
+                    <span class="rest-divider-time">${fmtTime(re.restSec)}</span>
+                    <button class="rest-divider-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="15" aria-label="Increase rest 15 seconds">+15</button>
+                  </div>
+                </td></tr>
               `; }).join("")}
             </table>
             <button class="icon-btn" style="width:100%;" data-action="add-routine-set" data-index="${i}">+ Add set</button>
@@ -927,14 +926,8 @@
             <div class="ex-title">${escapeHtml(ex.name)}</div>
             ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
           </div>
-          <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
-        </div>
-        <div class="ex-rest-row">
-          <div class="ex-rest">Rest between sets</div>
-          <div class="row-gap">
-            <button class="icon-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="-15">-15</button>
-            <span class="tiny" style="font-weight:600; min-width:36px; text-align:center;">${fmtTime(ex.restSec)}</span>
-            <button class="icon-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="15">+15</button>
+          <div class="ex-header-actions">
+            <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
         </div>
         <table class="set-table">
@@ -951,6 +944,13 @@
               <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">✓</button></td>
             </tr>
+            <tr class="rest-divider-row"><td colspan="5">
+              <div class="rest-divider">
+                <button class="rest-divider-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="-15" aria-label="Decrease rest 15 seconds">−15</button>
+                <span class="rest-divider-time">${fmtTime(ex.restSec)}</span>
+                <button class="rest-divider-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="15" aria-label="Increase rest 15 seconds">+15</button>
+              </div>
+            </td></tr>
           `; }).join("")}
         </table>
         <button class="icon-btn" data-action="add-set" data-exidx="${exIdx}">+ Add set</button>

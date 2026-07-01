@@ -126,8 +126,18 @@
   <div class="confirm-card" id="exercise-menu-card">
     <div class="confirm-title">Exercise options</div>
     <div class="menu-list" id="exercise-menu-actions">
-      <button class="menu-item" data-action="menu-add-note">Add note (RPE, rep range, etc.)</button>
-      <button class="menu-item" data-action="menu-add-warmup">Add warmup set</button>
+      <button class="menu-item" data-action="menu-add-note">
+        <span class="menu-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4.2L19 9.2l-4.2-4.2L4 15.8V20Z"/><path d="M13.3 6.3l4.2 4.2"/></svg>
+        </span>
+        <span>Add note (RPE, rep range, etc.)</span>
+      </button>
+      <button class="menu-item menu-item-warmup" data-action="menu-add-warmup">
+        <span class="menu-item-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c4 0 6-2.5 6-6.5 0-3-1.8-5-3-7 0 2-1 3-2 3-.5-2.5.5-5-1-8-3 3-5 6-5 9.5C7 19 8.5 22 12 22Z"/></svg>
+        </span>
+        <span>Add warmup set</span>
+      </button>
     </div>
     <div class="menu-note-form hidden" id="menu-note-form">
       <textarea class="menu-note-input" id="menu-note-input" rows="2" placeholder="e.g. RPE 7-8 | 8-10 reps"></textarea>
