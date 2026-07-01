@@ -17,6 +17,12 @@
   const appEl = document.getElementById("app");
   const toastEl = document.getElementById("toast");
 
+  // iOS Safari only applies :active CSS states to elements when the page
+  // has a touch listener somewhere — this no-op listener is the standard
+  // workaround, and is what makes the tap-press visual feedback below
+  // actually show up on iPhone (where navigator.vibrate is unavailable).
+  document.addEventListener("touchstart", function () {}, { passive: true });
+
   // ---------- Utilities ----------
   const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 

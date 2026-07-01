@@ -45,6 +45,29 @@ button {
   cursor: pointer;
 }
 
+/* Visual tap feedback — substitutes for haptics on platforms (iOS Safari)
+   that don't expose vibration to web apps. Applies a quick press-down
+   scale + fade to anything tappable. */
+button,
+.card-tap,
+.tab,
+.picker-row,
+.fab-add,
+.set-check,
+.picker-index-letter {
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+button:active:not(:disabled),
+.card-tap:active,
+.tab:active,
+.picker-row:active,
+.fab-add:active,
+.set-check:active,
+.picker-index-letter:active:not(:disabled) {
+  transform: scale(0.94);
+  opacity: 0.7;
+}
+
 #app {
   padding: calc(12px + var(--safe-top) + var(--restbar-h, 0px)) 16px calc(88px + var(--safe-bottom));
   max-width: 560px;
