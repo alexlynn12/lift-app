@@ -5,7 +5,7 @@
 
   // ---------- Global state ----------
   const state = {
-    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90, hapticsEnabled: true, bodyWeightLb: null },
+    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90, hapticsEnabled: true, bodyWeightLb: null, heightIn: null },
     customExercises: [],
     routines: [],
     workouts: [],
@@ -155,6 +155,26 @@
     const n = parseFloat(value);
     if (isNaN(n)) return 0;
     return u === "kg" ? kgToLb(n) : n;
+  }
+
+  // Height is stored internally in inches (same "pick one canonical unit"
+  // pattern as weight-in-lb), and reuses the existing lb/kg toggle to
+  // decide whether to display inches or centimeters — one unit preference
+  // for the whole app rather than a second, separate toggle.
+  function inToCm(inches) { return inches * 2.54; }
+  function cmToIn(cm) { return cm / 2.54; }
+  function heightUnitLabel() { return displayUnit() === "kg" ? "cm" : "in"; }
+
+  function heightToDisplay(heightIn) {
+    if (heightIn == null || heightIn === "") return "";
+    const v = displayUnit() === "kg" ? inToCm(heightIn) : heightIn;
+    return roundClean(v);
+  }
+
+  function heightFromDisplay(value) {
+    const n = parseFloat(value);
+    if (isNaN(n)) return null;
+    return displayUnit() === "kg" ? cmToIn(n) : n;
   }
 
   function roundClean(n) {
@@ -496,11 +516,19 @@
   const MOVEMENT_LOW = ["curl", "extension", "lateral raise", "front raise", "calf raise", "fly", "flye", "kickback", "pushdown", "shrug", "crunch", "sit-up", "v-up", "plank", "pinch", "wrist"];
   const MOVEMENT_HIGH = ["hyperextension", "rack pull", "farmer", "carry", "kettlebell swing", "swing", "turkish get-up", "get-up", "burpee", "box jump", "jump", "battle rope", "press", "row", "pull-up", "chin-up", "pulldown", "dip", "lunge", "step-up", "hip thrust", "good morning"];
 
-  function movementFactor(name) {
+  function movementTier(name) {
     const n = (name || "").toLowerCase();
-    if (MOVEMENT_VERY_HIGH.some((k) => n.includes(k))) return 1.3;
-    if (MOVEMENT_LOW.some((k) => n.includes(k))) return 0.85;
-    if (MOVEMENT_HIGH.some((k) => n.includes(k))) return 1.15;
+    if (MOVEMENT_VERY_HIGH.some((k) => n.includes(k))) return "veryHigh";
+    if (MOVEMENT_LOW.some((k) => n.includes(k))) return "low";
+    if (MOVEMENT_HIGH.some((k) => n.includes(k))) return "high";
+    return "moderate";
+  }
+
+  function movementFactor(name) {
+    const tier = movementTier(name);
+    if (tier === "veryHigh") return 1.3;
+    if (tier === "low") return 0.85;
+    if (tier === "high") return 1.15;
     return 1.0;
   }
 
@@ -510,6 +538,27 @@
     const equipment = EQUIPMENT_DIFFICULTY[ex.equipment] ?? 1.0;
     const movement = movementFactor(ex.name);
     return Math.max(0.65, Math.min(1.65, muscle * equipment * movement));
+  }
+
+  // Range-of-motion adjustment for height: a taller lifter's limbs travel
+  // farther per rep on compound lifts (deeper squat, longer pull, longer
+  // press arc), so the same weight x reps represents more actual work.
+  // Reference height is ~5'8" (68in, roughly average adult height) = no
+  // adjustment. Only movements whose ROM plausibly scales with height get
+  // adjusted at all, and isolation lifts (fixed joint ROM regardless of
+  // height) are left untouched. Leaving height blank in Settings also
+  // leaves this at a neutral 1.0 — it's a bonus adjustment, not a
+  // requirement.
+  const HEIGHT_REFERENCE_IN = 68;
+  const HEIGHT_ROM_PER_INCH = 0.005;
+
+  function heightRomFactor(ex, heightIn) {
+    if (!heightIn) return 1.0;
+    const tier = movementTier(ex ? ex.name : "");
+    const sensitivity = tier === "veryHigh" ? 1 : tier === "high" ? 0.7 : 0;
+    if (sensitivity === 0) return 1.0;
+    const raw = 1 + (heightIn - HEIGHT_REFERENCE_IN) * HEIGHT_ROM_PER_INCH * sensitivity;
+    return Math.max(0.85, Math.min(1.15, raw));
   }
 
   // Best-ever estimated 1RM for an exercise across all completed history
@@ -557,7 +606,8 @@
     const intensity = bestE1rm > 0
       ? Math.max(0.3, Math.min(1.3, thisE1rm / bestE1rm))
       : NEW_EXERCISE_INTENSITY;
-    return reps * intensity * exerciseDifficulty(ex);
+    const heightFactor = heightRomFactor(ex, state.settings.heightIn);
+    return reps * intensity * exerciseDifficulty(ex) * heightFactor;
   }
 
   // Raw (unbounded) effort total for a set of exercises, e.g. the working
@@ -1149,7 +1199,7 @@
       </div>
 
       <div class="section">
-        <h3>Body weight</h3>
+        <h3>Body profile</h3>
         <div class="card">
           <div class="row">
             <span>Your body weight</span>
@@ -1160,7 +1210,17 @@
               <span class="muted small">${unitLabel()}</span>
             </div>
           </div>
-          <div class="tiny muted" style="margin-top:8px;">Used to score bodyweight exercises (push-ups, pull-ups, planks) in your effort score. Without this we assume ${DEFAULT_BODYWEIGHT_LB} lb.</div>
+          <div class="tiny muted" style="margin-top:8px; margin-bottom:12px;">Used to score bodyweight exercises (push-ups, pull-ups, planks) in your effort score. Without this we assume ${DEFAULT_BODYWEIGHT_LB} lb.</div>
+          <div class="row" style="border-top:1px solid var(--border); padding-top:12px;">
+            <span>Your height</span>
+            <div class="row-gap">
+              <input type="text" inputmode="decimal" id="height-input" data-action="set-height"
+                value="${s.heightIn ? heightToDisplay(s.heightIn) : ""}" placeholder="${heightUnitLabel() === "cm" ? "173" : "68"}"
+                style="width:64px; text-align:right; font-weight:700; border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface);" />
+              <span class="muted small">${heightUnitLabel()}</span>
+            </div>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">Used to fairly adjust effort scoring for range of motion on lifts like squats, deadlifts, and presses — taller lifters move the weight farther per rep. Isolation exercises aren't affected. Leaving this blank skips the adjustment entirely.</div>
         </div>
       </div>
 
@@ -1661,6 +1721,9 @@
       else s.reps = t.value === "" ? "" : (parseInt(t.value, 10) || 0);
     } else if (action === "set-bodyweight") {
       state.settings.bodyWeightLb = t.value === "" ? null : weightFromDisplay(t.value);
+      saveSettings();
+    } else if (action === "set-height") {
+      state.settings.heightIn = t.value === "" ? null : heightFromDisplay(t.value);
       saveSettings();
     }
   }
