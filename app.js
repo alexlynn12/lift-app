@@ -496,8 +496,7 @@
     state.activeWorkout = null;
     stopWorkoutClock();
     await DB.kvSet("activeWorkout", null);
-    showToast(prCount > 0 ? `Workout saved · ${prCount} PR${prCount > 1 ? "s" : ""}` : "Workout saved");
-    navigate("home");
+    navigate("workout-complete", { id: record.id });
   }
 
   function discardWorkout() {
@@ -523,6 +522,7 @@
       case "routine-edit": renderRoutineEdit(params); break;
       case "workout-active": renderWorkoutActive(); break;
       case "workout-detail": renderWorkoutDetail(params); break;
+      case "workout-complete": renderWorkoutComplete(params); break;
       case "exercise-detail": renderExerciseDetail(params); break;
       default: renderHome(); break;
     }
@@ -552,14 +552,14 @@
         <div class="card card-tap" data-action="resume-workout" style="border-color:var(--accent); background:var(--accent-bg);">
           <div class="row">
             <div>
-              <div style="font-weight:600;">Workout in progress</div>
+              <div style="font-weight:700;">Workout in progress</div>
               <div class="small muted">${state.activeWorkout.name} · tap to resume</div>
             </div>
             <span class="badge badge-accent">Resume</span>
           </div>
         </div>` : ""}
 
-      <button class="btn btn-primary" data-action="start-empty" style="margin-bottom:18px;">+ Start empty workout</button>
+      <button class="btn btn-primary" data-action="start-empty" style="margin-bottom:16px;">+ Start empty workout</button>
 
       <div class="section">
         <div class="row" style="margin-bottom:8px;">
@@ -570,7 +570,7 @@
           <div class="card card-tap" data-action="open-routine" data-id="${r.id}">
             <div class="row">
               <div>
-                <div style="font-weight:600;">${escapeHtml(r.name)}</div>
+                <div style="font-weight:700;">${escapeHtml(r.name)}</div>
                 <div class="small muted">${r.exercises.length} exercise${r.exercises.length === 1 ? "" : "s"}</div>
               </div>
               <button class="btn btn-sm btn-accent" data-action="start-routine" data-id="${r.id}">Start</button>
@@ -585,7 +585,7 @@
           <h3>Last workout</h3>
           <div class="card card-tap" data-action="view-workout" data-id="${last.id}">
             <div class="row">
-              <div style="font-weight:600;">${escapeHtml(last.name)}</div>
+              <div style="font-weight:700;">${escapeHtml(last.name)}</div>
               <div class="small muted">${fmtDate(last.date)}</div>
             </div>
             <div class="small muted" style="margin-top:4px;">${totalVolume(last)} ${unitLabel()} volume${last.prCount ? ` · ${last.prCount} PR${last.prCount > 1 ? "s" : ""}` : ""}</div>
@@ -620,7 +620,7 @@
         <div class="card card-tap" data-action="view-workout" data-id="${w.id}">
           <div class="row" style="gap:12px;">
             <div style="min-width:0; flex:1;">
-              <div style="font-weight:600;">${escapeHtml(w.name)}</div>
+              <div style="font-weight:700;">${escapeHtml(w.name)}</div>
               <div class="small muted">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}</div>
             </div>
             <div class="row-gap">
@@ -641,7 +641,7 @@
       body.innerHTML = list.map((ex) => `
         <div class="list-row card-tap" data-action="view-exercise" data-id="${ex.id}">
           <div>
-            <div style="font-weight:500;">${escapeHtml(ex.name)}</div>
+            <div class="row-title">${escapeHtml(ex.name)}</div>
             <div class="tiny muted">${ex.muscle}</div>
           </div>
           <span class="muted">›</span>
@@ -658,19 +658,19 @@
 
     appEl.innerHTML = `
       <div class="topbar"><h1>Exercises</h1></div>
-      <input type="text" id="ex-search" placeholder="Search exercises" value="${escapeHtml(params.q || "")}" style="margin-bottom:14px;" />
+      <input type="text" id="ex-search" placeholder="Search exercises" value="${escapeHtml(params.q || "")}" style="margin-bottom:16px;" />
       <div>
         ${list.map((ex) => `
           <div class="list-row card-tap" data-action="view-exercise" data-id="${ex.id}">
             <div>
-              <div style="font-weight:500;">${escapeHtml(ex.name)}</div>
+              <div class="row-title">${escapeHtml(ex.name)}</div>
               <div class="tiny muted">${ex.muscle} · ${ex.equipment}</div>
             </div>
             <span class="muted">›</span>
           </div>
         `).join("")}
       </div>
-      <button class="fab-add" data-action="new-exercise" style="margin-top:14px;">+ Add custom exercise</button>
+      <button class="fab-add" data-action="new-exercise" style="margin-top:16px;">+ Add custom exercise</button>
     `;
     const search = document.getElementById("ex-search");
     search.addEventListener("input", () => {
@@ -711,14 +711,14 @@
       <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">${ex.muscle} · ${ex.equipment}</div>
 
       ${bestSet ? `
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px;">
-          <div class="card" style="margin-bottom:0;">
-            <div class="tiny muted">Best set</div>
-            <div style="font-size:18px; font-weight:600;">${weightToDisplay(bestSet.weight)} ${unitLabel()} × ${bestSet.reps}</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px;">
+          <div class="stat-card">
+            <div class="stat-label">Best set</div>
+            <div class="stat-value">${weightToDisplay(bestSet.weight)} ${unitLabel()} × ${bestSet.reps}</div>
           </div>
-          <div class="card" style="margin-bottom:0;">
-            <div class="tiny muted">Est. 1RM</div>
-            <div style="font-size:18px; font-weight:600;">${Math.round(weightToDisplay(bestE1rm))} ${unitLabel()}</div>
+          <div class="stat-card">
+            <div class="stat-label">Est. 1RM</div>
+            <div class="stat-value">${Math.round(weightToDisplay(bestE1rm))} ${unitLabel()}</div>
           </div>
         </div>
         <div class="chart-wrap">${renderLineChart(chartPoints)}</div>
@@ -766,7 +766,7 @@
       <div class="section">
         <h3>Units</h3>
         <div class="card">
-          <div class="row" style="margin-bottom:${s.unitMode === "both" ? "10px" : "0"};">
+          <div class="row" style="margin-bottom:${s.unitMode === "both" ? "12px" : "0"};">
             <span>Weight unit</span>
             <div class="segmented" style="width:160px;">
               <button data-action="set-unit-mode" data-mode="lb" class="${s.unitMode === "lb" ? "active" : ""}">lb</button>
@@ -792,7 +792,7 @@
             <span>Default rest duration</span>
             <div class="row-gap">
               <button class="icon-btn" data-action="default-rest-adjust" data-delta="-15">-15</button>
-              <span style="font-weight:600; min-width:48px; text-align:center;">${fmtTime(s.defaultRestSec)}</span>
+              <span style="font-weight:700; min-width:48px; text-align:center;">${fmtTime(s.defaultRestSec)}</span>
               <button class="icon-btn" data-action="default-rest-adjust" data-delta="15">+15</button>
             </div>
           </div>
@@ -807,7 +807,7 @@
             <span>Rest timer alerts</span>
             <span class="badge ${notif.cls}">${notif.label}</span>
           </div>
-          ${notif.canRequest ? `<button class="btn" style="margin-top:10px;" data-action="enable-notifications">Enable notifications</button>` : ""}
+          ${notif.canRequest ? `<button class="btn" style="margin-top:12px;" data-action="enable-notifications">Enable notifications</button>` : ""}
           <div class="tiny muted" style="margin-top:8px;">On iPhone, you need to add Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
         </div>
       </div>
@@ -869,7 +869,7 @@
         <button class="back-btn" data-action="back">‹ Back</button>
         <button class="btn btn-sm btn-primary" data-action="save-routine" data-id="${draft.id}">Save</button>
       </div>
-      <input type="text" id="routine-name" value="${escapeHtml(draft.name)}" style="font-size:20px; font-weight:600; border:none; background:transparent; padding:4px 0; margin-bottom:16px;" />
+      <input type="text" id="routine-name" class="title-input" value="${escapeHtml(draft.name)}" />
 
       <div id="routine-exercises">
         ${draft.exercises.map((re, i) => {
@@ -883,7 +883,7 @@
                 ${re.note ? `<div class="ex-note">${escapeHtml(re.note)}</div>` : ""}
               </div>
               <div class="ex-header-actions">
-                <button class="ex-menu-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">⋯</button>
+                <button class="ex-menu-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">${ICONS.kebab}</button>
                 <button class="icon-btn" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
               </div>
             </div>
@@ -896,7 +896,7 @@
                   <td class="set-num">${label}</td>
                   <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="routine-set-weight" data-index="${i}" data-setidx="${si}" value="${s.weight === "" || s.weight == null ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
                   <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="routine-set-reps" data-index="${i}" data-setidx="${si}" value="${s.reps === "" || s.reps == null ? "" : s.reps}" placeholder="0" /></td>
-                  <td><button class="set-remove-btn" data-action="remove-routine-set" data-index="${i}" data-setidx="${si}" aria-label="Remove set">×</button></td>
+                  <td><button class="set-remove-btn" data-action="remove-routine-set" data-index="${i}" data-setidx="${si}" aria-label="Remove set">${ICONS.close}</button></td>
                 </tr>
                 <tr class="rest-divider-row"><td colspan="4">
                   <div class="rest-divider">
@@ -912,7 +912,7 @@
         }).join("")}
       </div>
       <button class="fab-add" data-action="add-routine-exercise">+ Add exercise</button>
-      ${draft.exercises.length ? `<button class="btn btn-danger" style="margin-top:18px;" data-action="delete-routine" data-id="${draft.id}">Delete routine</button>` : ""}
+      ${draft.exercises.length ? `<button class="btn btn-danger" style="margin-top:16px;" data-action="delete-routine" data-id="${draft.id}">Delete routine</button>` : ""}
     `;
 
     document.getElementById("routine-name").addEventListener("change", (e) => { draft.name = e.target.value || "Routine"; });
@@ -927,7 +927,7 @@
         <span class="workout-clock" id="workout-elapsed">${fmtTime((Date.now() - new Date(w.startedAt).getTime()) / 1000)}</span>
         <button class="btn btn-sm btn-primary" data-action="finish-workout">Finish</button>
       </div>
-      <input type="text" id="workout-name" value="${escapeHtml(w.name)}" style="font-size:20px; font-weight:600; border:none; background:transparent; padding:4px 0; margin-bottom:16px;" />
+      <input type="text" id="workout-name" class="title-input" value="${escapeHtml(w.name)}" />
 
       <div id="workout-exercises">
         ${w.exercises.map((ex, exIdx) => renderExerciseBlock(ex, exIdx)).join("")}
@@ -979,7 +979,7 @@
             ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
           </div>
           <div class="ex-header-actions">
-            <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">⋯</button>
+            <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">${ICONS.kebab}</button>
             <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
         </div>
@@ -995,8 +995,8 @@
               <td class="set-prev">${prevLabel}</td>
               <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
               <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
-              <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">✓</button></td>
-              <td><button class="set-remove-btn" data-action="remove-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Remove set">×</button></td>
+              <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">${ICONS.check}</button></td>
+              <td><button class="set-remove-btn" data-action="remove-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Remove set">${ICONS.close}</button></td>
             </tr>
             <tr class="rest-divider-row"><td colspan="6">
               <div class="rest-divider">
@@ -1008,6 +1008,34 @@
           `; }).join("")}
         </table>
         <button class="icon-btn" data-action="add-set" data-exidx="${exIdx}">+ Add set</button>
+      </div>
+    `;
+  }
+
+  // Peak-End: the last thing someone sees when they finish a workout
+  // shouldn't just be a toast — it's the "ending" moment, so it gets a
+  // dedicated screen with a celebratory beat and a clear close.
+  function renderWorkoutComplete(params) {
+    const w = state.workouts.find((x) => x.id === params.id);
+    if (!w) { navigate("home"); return; }
+    const setCount = w.exercises.reduce((n, e) => n + e.sets.length, 0);
+    const hasPr = w.prCount > 0;
+    appEl.innerHTML = `
+      <div class="complete-wrap">
+        <div class="complete-icon">${ICONS.check}</div>
+        <div class="complete-title">Workout complete</div>
+        <div class="complete-subtitle">${escapeHtml(w.name)} · ${fmtDate(w.date)}</div>
+        ${hasPr ? `<div class="complete-pr-banner">🎉 ${w.prCount} new PR${w.prCount > 1 ? "s" : ""} today</div>` : ""}
+        <div class="complete-stats">
+          <div class="stat-card"><div class="stat-label">Duration</div><div class="stat-value">${fmtDuration(w.durationSec)}</div></div>
+          <div class="stat-card"><div class="stat-label">Volume</div><div class="stat-value">${totalVolume(w)} ${unitLabel()}</div></div>
+          <div class="stat-card"><div class="stat-label">Sets logged</div><div class="stat-value">${setCount}</div></div>
+          <div class="stat-card"><div class="stat-label">Exercises</div><div class="stat-value">${w.exercises.length}</div></div>
+        </div>
+        <div class="small muted" style="text-align:center;">${hasPr ? "Strong work — you're getting stronger." : "You showed up today. That's what counts."}</div>
+        <div class="complete-actions">
+          <button class="btn btn-primary" data-action="complete-done">Done</button>
+        </div>
       </div>
     `;
   }
@@ -1038,6 +1066,15 @@
   function escapeHtml(str) {
     return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
+
+  // Small, consistent icon set used in place of raw text glyphs (✓ × ⋯)
+  // throughout the set tables and exercise menus — keeps the icon language
+  // uniform instead of mixing characters with the app's SVG icons elsewhere.
+  const ICONS = {
+    check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>`,
+    close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
+    kebab: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
+  };
 
   const EMPTY_STATE_ICONS = {
     routines: `<path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="7" r="1.3" fill="currentColor" stroke="none"/>`,
@@ -1082,6 +1119,7 @@
         break;
       }
       case "view-workout": navigate("workout-detail", { id: t.dataset.id }); break;
+      case "complete-done": navigate("home"); break;
       case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
       case "history-tab": navigate("history", { tab: t.dataset.tab }); break;
