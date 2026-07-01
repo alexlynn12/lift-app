@@ -122,6 +122,21 @@
   </div>
 </div>
 
+<div id="exercise-menu-overlay" class="confirm-overlay hidden">
+  <div class="confirm-card" id="exercise-menu-card">
+    <div class="confirm-title">Exercise options</div>
+    <div class="menu-list" id="exercise-menu-actions">
+      <button class="menu-item" data-action="menu-add-note">Add note (RPE, rep range, etc.)</button>
+      <button class="menu-item" data-action="menu-add-warmup">Add warmup set</button>
+    </div>
+    <div class="menu-note-form hidden" id="menu-note-form">
+      <textarea class="menu-note-input" id="menu-note-input" rows="2" placeholder="e.g. RPE 7-8 | 8-10 reps"></textarea>
+      <button class="btn btn-primary btn-sm" id="menu-note-save" style="width:100%; margin-top:10px;">Save note</button>
+    </div>
+    <button class="confirm-btn confirm-btn-cancel" id="exercise-menu-close" style="margin-top:14px;">Close</button>
+  </div>
+</div>
+
 <script src="db.js"></script>
 <script src="exercises-data.js"></script>
 <script src="app.js"></script>

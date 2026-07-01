@@ -47,6 +47,62 @@
   confirmCancelBtn.addEventListener("click", () => { vibrateTap(); closeConfirm(false); });
   confirmOkBtn.addEventListener("click", () => { vibrateTap(); closeConfirm(true); });
 
+  // ---------- Per-exercise "..." options menu (routine editor) ----------
+  // Lets a routine exercise carry a free-text note (RPE, rep range, tempo,
+  // etc.) and lets the person insert a warmup set, without cluttering the
+  // main routine-edit screen with extra buttons.
+  const exerciseMenuOverlayEl = document.getElementById("exercise-menu-overlay");
+  const exerciseMenuActionsEl = document.getElementById("exercise-menu-actions");
+  const menuNoteFormEl = document.getElementById("menu-note-form");
+  const menuNoteInputEl = document.getElementById("menu-note-input");
+  const menuNoteSaveBtn = document.getElementById("menu-note-save");
+  const exerciseMenuCloseBtn = document.getElementById("exercise-menu-close");
+  let exerciseMenuIndex = null;
+
+  function openExerciseMenu(index) {
+    exerciseMenuIndex = index;
+    exerciseMenuActionsEl.classList.remove("hidden");
+    menuNoteFormEl.classList.add("hidden");
+    exerciseMenuOverlayEl.classList.remove("hidden");
+    requestAnimationFrame(() => exerciseMenuOverlayEl.classList.add("open"));
+  }
+
+  function closeExerciseMenu() {
+    exerciseMenuOverlayEl.classList.remove("open");
+    setTimeout(() => exerciseMenuOverlayEl.classList.add("hidden"), 180);
+    exerciseMenuIndex = null;
+  }
+
+  exerciseMenuCloseBtn.addEventListener("click", () => { vibrateTap(); closeExerciseMenu(); });
+
+  exerciseMenuActionsEl.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-action]");
+    if (!t || exerciseMenuIndex == null) return;
+    vibrateTap();
+    const draft = renderRoutineEdit._draft;
+    const re = draft && draft.exercises[exerciseMenuIndex];
+    if (!re) { closeExerciseMenu(); return; }
+    if (t.dataset.action === "menu-add-note") {
+      menuNoteInputEl.value = re.note || "";
+      exerciseMenuActionsEl.classList.add("hidden");
+      menuNoteFormEl.classList.remove("hidden");
+      menuNoteInputEl.focus();
+    } else if (t.dataset.action === "menu-add-warmup") {
+      re.sets.unshift({ weight: "", reps: "", isWarmup: true });
+      closeExerciseMenu();
+      render();
+    }
+  });
+
+  menuNoteSaveBtn.addEventListener("click", () => {
+    vibrateTap();
+    const draft = renderRoutineEdit._draft;
+    const re = draft && exerciseMenuIndex != null && draft.exercises[exerciseMenuIndex];
+    if (re) re.note = menuNoteInputEl.value.trim();
+    closeExerciseMenu();
+    render();
+  });
+
   // iOS Safari only applies :active CSS states to elements when the page
   // has a touch listener somewhere — this no-op listener is the standard
   // workaround, and is what makes the tap-press visual feedback below
@@ -293,33 +349,49 @@
     return null;
   }
 
+  // `setIndex` here is the index among *working* (non-warmup) sets only, so
+  // warmup sets added in the routine editor don't shift the "previous"
+  // column out of alignment with what was actually logged last time.
   function previousSetLabel(exerciseId, setIndex) {
     const found = lastCompletedWorkoutFor(exerciseId);
     if (!found) return "—";
-    const completedSets = found.exercise.sets.filter((s) => s.completed);
+    const completedSets = found.exercise.sets.filter((s) => s.completed && !s.isWarmup);
     const s = completedSets[setIndex];
     if (!s) return "—";
     return `${weightToDisplay(s.weight)}×${s.reps}`;
   }
 
   // Builds a starting set list for an exercise that's just been added to a
-  // workout, pre-filled with the weight/reps from the last time it was
-  // performed so the person doesn't have to retype it. Falls back to blank
-  // sets if there's no history yet. `count`, when given, pins the number of
-  // sets (e.g. a routine's target set count); otherwise it matches however
-  // many sets were completed last time, or defaults to 3. `targetWeight`,
-  // when given (e.g. a routine's planned weight), overrides the prefilled
-  // weight for every set.
-  function defaultSetsForExercise(exerciseId, count, targetWeight) {
+  // freeform workout (no routine), pre-filled with the weight/reps from the
+  // last time it was performed so the person doesn't have to retype it.
+  // Falls back to blank sets if there's no history yet.
+  function defaultSetsForExercise(exerciseId, count) {
     const found = lastCompletedWorkoutFor(exerciseId);
-    const completed = found ? found.exercise.sets.filter((s) => s.completed) : [];
+    const completed = found ? found.exercise.sets.filter((s) => s.completed && !s.isWarmup) : [];
     const n = count || completed.length || 3;
-    const hasTarget = targetWeight !== undefined && targetWeight !== null && targetWeight !== "";
     return Array.from({ length: n }, (_, i) => {
       const prev = completed[i];
-      const weight = hasTarget ? targetWeight : (prev ? prev.weight : "");
-      const reps = prev ? prev.reps : "";
-      return { weight, reps, completed: false };
+      return { weight: prev ? prev.weight : "", reps: prev ? prev.reps : "", completed: false };
+    });
+  }
+
+  // Builds the starting set list for a workout started from a routine.
+  // Each routine set carries its own planned weight/reps/warmup flag; any
+  // left blank fall back to what was logged last time for that exercise
+  // (matched by position among working sets, so warmups don't throw off
+  // the alignment).
+  function buildWorkoutSetsFromRoutine(exerciseId, routineSets) {
+    const found = lastCompletedWorkoutFor(exerciseId);
+    const completed = found ? found.exercise.sets.filter((s) => s.completed && !s.isWarmup) : [];
+    let workingIdx = 0;
+    return routineSets.map((rs) => {
+      const isWarmup = !!rs.isWarmup;
+      const prev = isWarmup ? null : completed[workingIdx++];
+      const hasWeight = rs.weight !== "" && rs.weight != null;
+      const hasReps = rs.reps !== "" && rs.reps != null;
+      const weight = hasWeight ? rs.weight : (prev ? prev.weight : "");
+      const reps = hasReps ? rs.reps : (prev ? prev.reps : "");
+      return { weight, reps, completed: false, isWarmup };
     });
   }
 
@@ -330,7 +402,7 @@
       const ex = w.exercises.find((e) => e.exerciseId === exerciseId);
       if (!ex) continue;
       for (const s of ex.sets) {
-        if (s.completed && s.weight > best) best = s.weight;
+        if (s.completed && !s.isWarmup && s.weight > best) best = s.weight;
       }
     }
     return best;
@@ -343,12 +415,16 @@
 
   function startWorkout(routine) {
     const exercises = routine
-      ? routine.exercises.map((re) => ({
-          exerciseId: re.exerciseId,
-          name: exerciseById(re.exerciseId)?.name || "Exercise",
-          restSec: re.restSec || state.settings.defaultRestSec,
-          sets: defaultSetsForExercise(re.exerciseId, re.targetSets || 3, re.targetWeight),
-        }))
+      ? routine.exercises.map((re) => {
+          normalizeRoutineExercise(re);
+          return {
+            exerciseId: re.exerciseId,
+            name: exerciseById(re.exerciseId)?.name || "Exercise",
+            note: re.note || "",
+            restSec: re.restSec || state.settings.defaultRestSec,
+            sets: buildWorkoutSetsFromRoutine(re.exerciseId, re.sets),
+          };
+        })
       : [];
     state.activeWorkout = {
       id: uid(),
@@ -377,7 +453,8 @@
     let prCount = 0;
     for (const e of cleanExercises) {
       const prevBest = bestWeightFor(e.exerciseId);
-      const maxThis = Math.max(...e.sets.map((s) => s.weight || 0));
+      const workingWeights = e.sets.filter((s) => !s.isWarmup).map((s) => s.weight || 0);
+      const maxThis = workingWeights.length ? Math.max(...workingWeights) : 0;
       if (maxThis > prevBest) prCount++;
     }
 
@@ -493,7 +570,7 @@
 
   function totalVolume(workout) {
     let v = 0;
-    for (const e of workout.exercises) for (const s of e.sets) v += (s.weight || 0) * (s.reps || 0);
+    for (const e of workout.exercises) for (const s of e.sets) if (!s.isWarmup) v += (s.weight || 0) * (s.reps || 0);
     return Math.round(weightToDisplay(v) || 0).toLocaleString();
   }
 
@@ -588,16 +665,17 @@
       const e = w.exercises.find((x) => x.exerciseId === ex.id);
       if (e) {
         const completed = e.sets.filter((s) => s.completed);
-        if (completed.length) history.push({ date: w.date, sets: completed });
+        if (completed.length) history.push({ date: w.date, sets: completed, workingSets: completed.filter((s) => !s.isWarmup) });
       }
     }
     let bestSet = null, bestE1rm = 0;
-    history.forEach((h) => h.sets.forEach((s) => {
+    history.forEach((h) => h.workingSets.forEach((s) => {
       const e1rm = estOneRm(s.weight, s.reps);
       if (e1rm > bestE1rm) { bestE1rm = e1rm; bestSet = s; }
     }));
 
-    const chartPoints = history.slice(0, 12).reverse().map((h) => Math.max(...h.sets.map((s) => estOneRm(s.weight, s.reps))));
+    const chartPoints = history.filter((h) => h.workingSets.length).slice(0, 12).reverse()
+      .map((h) => Math.max(...h.workingSets.map((s) => estOneRm(s.weight, s.reps))));
 
     appEl.innerHTML = `
       <div class="topbar">
@@ -625,7 +703,7 @@
         ${history.map((h) => `
           <div class="list-row">
             <span class="muted small">${fmtDate(h.date)}</span>
-            <span class="small">${h.sets.map((s) => `${weightToDisplay(s.weight)}×${s.reps}`).join(", ")}</span>
+            <span class="small">${h.sets.map((s) => `${s.isWarmup ? "W " : ""}${weightToDisplay(s.weight)}×${s.reps}`).join(", ")}</span>
           </div>
         `).join("")}
       ` : ""}
@@ -732,13 +810,33 @@
     `;
   }
 
+  // Migrates a routine exercise to the current shape (an explicit list of
+  // sets, each with its own weight/reps and a warmup flag, plus a free-text
+  // note) so older routines saved before this shape existed still load and
+  // edit correctly. Mutates and returns `re`.
+  function normalizeRoutineExercise(re) {
+    if (!Array.isArray(re.sets)) {
+      const n = re.targetSets || 3;
+      const w = re.targetWeight === "" || re.targetWeight == null ? "" : re.targetWeight;
+      re.sets = Array.from({ length: n }, () => ({ weight: w, reps: "", isWarmup: false }));
+      delete re.targetSets;
+      delete re.targetWeight;
+    }
+    if (re.note == null) re.note = "";
+    if (re.restSec == null) re.restSec = state.settings.defaultRestSec;
+    return re;
+  }
+
   function renderRoutineEdit(params) {
     let draft = renderRoutineEdit._draft;
     if (!draft || draft.id !== params.id) {
       const existing = state.routines.find((r) => r.id === params.id);
-      draft = existing || { id: params.id, name: "New routine", exercises: [] };
+      draft = existing ? { ...existing, exercises: existing.exercises.map((re) => normalizeRoutineExercise({ ...re, sets: re.sets ? re.sets.map((s) => ({ ...s })) : undefined })) }
+        : { id: params.id, name: "New routine", exercises: [] };
       renderRoutineEdit._draft = draft;
     }
+
+    const u = unitLabel();
 
     appEl.innerHTML = `
       <div class="topbar">
@@ -750,27 +848,41 @@
       <div id="routine-exercises">
         ${draft.exercises.map((re, i) => {
           const ex = exerciseById(re.exerciseId);
+          let workingNum = 0;
           return `
-          <div class="card">
-            <div class="row">
-              <div style="font-weight:600;">${ex ? escapeHtml(ex.name) : "Unknown"}</div>
-              <button class="icon-btn" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
-            </div>
-            <div class="row" style="margin-top:8px;">
-              <span class="small muted">Sets</span>
+          <div class="exercise-block">
+            <div class="ex-header">
+              <div>
+                <div class="ex-title">${ex ? escapeHtml(ex.name) : "Unknown"}</div>
+                ${re.note ? `<div class="ex-note">${escapeHtml(re.note)}</div>` : ""}
+              </div>
               <div class="row-gap">
-                <button class="icon-btn" data-action="routine-sets-adjust" data-index="${i}" data-delta="-1">-</button>
-                <span style="min-width:20px; text-align:center; font-weight:600;">${re.targetSets || 3}</span>
-                <button class="icon-btn" data-action="routine-sets-adjust" data-index="${i}" data-delta="1">+</button>
+                <button class="icon-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">⋯</button>
+                <button class="icon-btn" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
               </div>
             </div>
-            <div class="row" style="margin-top:8px;">
-              <span class="small muted">Weight</span>
+            <div class="ex-rest-row">
+              <div class="ex-rest">Rest between sets</div>
               <div class="row-gap">
-                <input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="routine-weight" data-index="${i}" value="${re.targetWeight === "" || re.targetWeight == null ? "" : weightToDisplay(re.targetWeight)}" placeholder="0" style="width:70px;" />
-                <span class="small muted">${unitLabel()}</span>
+                <button class="icon-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="-15">-15</button>
+                <span class="tiny" style="font-weight:600; min-width:36px; text-align:center;">${fmtTime(re.restSec)}</span>
+                <button class="icon-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="15">+15</button>
               </div>
             </div>
+            <table class="set-table">
+              <tr><th>Set</th><th>${u}</th><th>Reps</th><th></th></tr>
+              ${re.sets.map((s, si) => {
+                const label = s.isWarmup ? "W" : ++workingNum;
+                return `
+                <tr class="set-row ${s.isWarmup ? "warmup" : ""}">
+                  <td class="set-num">${label}</td>
+                  <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="routine-set-weight" data-index="${i}" data-setidx="${si}" value="${s.weight === "" || s.weight == null ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
+                  <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="routine-set-reps" data-index="${i}" data-setidx="${si}" value="${s.reps === "" || s.reps == null ? "" : s.reps}" placeholder="0" /></td>
+                  <td><button class="set-remove-btn" data-action="remove-routine-set" data-index="${i}" data-setidx="${si}" aria-label="Remove set">×</button></td>
+                </tr>
+              `; }).join("")}
+            </table>
+            <button class="icon-btn" style="width:100%;" data-action="add-routine-set" data-index="${i}">+ Add set</button>
           </div>`;
         }).join("")}
       </div>
@@ -807,10 +919,14 @@
 
   function renderExerciseBlock(ex, exIdx) {
     const u = unitLabel();
+    let workingNum = 0;
     return `
       <div class="exercise-block">
         <div class="ex-header">
-          <div class="ex-title">${escapeHtml(ex.name)}</div>
+          <div>
+            <div class="ex-title">${escapeHtml(ex.name)}</div>
+            ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
+          </div>
           <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
         </div>
         <div class="ex-rest-row">
@@ -823,15 +939,19 @@
         </div>
         <table class="set-table">
           <tr><th>Set</th><th>Previous</th><th>${u}</th><th>Reps</th><th></th></tr>
-          ${ex.sets.map((s, setIdx) => `
-            <tr class="set-row ${s.completed ? "completed" : ""}">
-              <td class="set-num">${setIdx + 1}</td>
-              <td class="set-prev">${previousSetLabel(ex.exerciseId, setIdx)}</td>
+          ${ex.sets.map((s, setIdx) => {
+            const isWarmup = !!s.isWarmup;
+            const label = isWarmup ? "W" : (++workingNum);
+            const prevLabel = isWarmup ? "—" : previousSetLabel(ex.exerciseId, workingNum - 1);
+            return `
+            <tr class="set-row ${s.completed ? "completed" : ""} ${isWarmup ? "warmup" : ""}">
+              <td class="set-num">${label}</td>
+              <td class="set-prev">${prevLabel}</td>
               <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
               <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">✓</button></td>
             </tr>
-          `).join("")}
+          `; }).join("")}
         </table>
         <button class="icon-btn" data-action="add-set" data-exidx="${exIdx}">+ Add set</button>
       </div>
@@ -845,15 +965,18 @@
       <div class="topbar"><button class="back-btn" data-action="back">‹ Back</button></div>
       <h1>${escapeHtml(w.name)}</h1>
       <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}${w.prCount ? ` · ${w.prCount} PR${w.prCount > 1 ? "s" : ""}` : ""}</div>
-      ${w.exercises.map((ex) => `
+      ${w.exercises.map((ex) => {
+        let workingNum = 0;
+        return `
         <div class="exercise-block">
           <div class="ex-title">${escapeHtml(ex.name)}</div>
+          ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
           <table class="set-table">
             <tr><th>Set</th><th>${unitLabel()}</th><th>Reps</th></tr>
-            ${ex.sets.map((s, i) => `<tr><td class="set-num">${i + 1}</td><td>${weightToDisplay(s.weight)}</td><td>${s.reps}</td></tr>`).join("")}
+            ${ex.sets.map((s) => `<tr class="set-row ${s.isWarmup ? "warmup" : ""}"><td class="set-num">${s.isWarmup ? "W" : ++workingNum}</td><td>${weightToDisplay(s.weight)}</td><td>${s.reps}</td></tr>`).join("")}
           </table>
         </div>
-      `).join("")}
+      `; }).join("")}
       <button class="btn btn-danger" style="margin-top:8px;" data-action="delete-workout" data-id="${w.id}">Delete workout</button>
     `;
   }
@@ -938,9 +1061,24 @@
         renderRoutineEdit._draft.exercises.splice(parseInt(t.dataset.index, 10), 1);
         render();
         break;
-      case "routine-sets-adjust": {
+      case "routine-ex-menu":
+        openExerciseMenu(parseInt(t.dataset.index, 10));
+        break;
+      case "routine-rest-adjust": {
         const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
-        re.targetSets = Math.max(1, (re.targetSets || 3) + parseInt(t.dataset.delta, 10));
+        re.restSec = Math.max(0, re.restSec + parseInt(t.dataset.delta, 10));
+        render();
+        break;
+      }
+      case "add-routine-set": {
+        const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
+        re.sets.push({ weight: "", reps: "", isWarmup: false });
+        render();
+        break;
+      }
+      case "remove-routine-set": {
+        const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
+        re.sets.splice(parseInt(t.dataset.setidx, 10), 1);
         render();
         break;
       }
@@ -994,9 +1132,11 @@
       else s.reps = parseInt(t.value, 10) || 0;
       cascadeSetForward(exIdx, setIdx, s.weight, s.reps);
       saveActiveWorkout();
-    } else if (action === "routine-weight") {
+    } else if (action === "routine-set-weight" || action === "routine-set-reps") {
       const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
-      re.targetWeight = t.value === "" ? "" : weightFromDisplay(t.value);
+      const s = re.sets[parseInt(t.dataset.setidx, 10)];
+      if (action === "routine-set-weight") s.weight = t.value === "" ? "" : weightFromDisplay(t.value);
+      else s.reps = t.value === "" ? "" : (parseInt(t.value, 10) || 0);
     }
   }
 
@@ -1221,7 +1361,7 @@
     for (const w of state.workouts) {
       const ex = w.exercises.find((x) => x.exerciseId === exerciseId);
       if (ex) {
-        const completed = ex.sets.filter((s) => s.completed);
+        const completed = ex.sets.filter((s) => s.completed && !s.isWarmup);
         if (completed.length) {
           const best = completed.reduce((a, b) => ((b.weight || 0) > (a.weight || 0) ? b : a));
           return `${weightToDisplay(best.weight)} ${unitLabel()} × ${best.reps}`;
@@ -1296,13 +1436,23 @@
     const ex = exerciseById(exerciseId);
     if (!ex) return;
     if (pickerContext === "routine") {
-      renderRoutineEdit._draft.exercises.push({ exerciseId: ex.id, targetSets: 3, targetWeight: "", restSec: state.settings.defaultRestSec });
+      renderRoutineEdit._draft.exercises.push({
+        exerciseId: ex.id,
+        note: "",
+        restSec: state.settings.defaultRestSec,
+        sets: [
+          { weight: "", reps: "", isWarmup: false },
+          { weight: "", reps: "", isWarmup: false },
+          { weight: "", reps: "", isWarmup: false },
+        ],
+      });
       closeExercisePicker();
       render();
     } else if (pickerContext === "workout") {
       state.activeWorkout.exercises.push({
         exerciseId: ex.id,
         name: ex.name,
+        note: "",
         restSec: state.settings.defaultRestSec,
         sets: defaultSetsForExercise(ex.id),
       });
