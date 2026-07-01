@@ -21,16 +21,20 @@
   --text: #1c1c1a;
   --text-2: #6b6a63;
   --text-3: #9c9a90;
-  /* Brand palette lifted from the app icon: teal for primary actions/accent,
-     coral for warmup/energy accent. Success/danger stay universal green/red. */
-  --accent: #0f9c90;
-  --accent-bg: #e2f5f2;
+  /* Brand palette sampled directly from the app icon: the icon's blue for
+     primary actions/accent, its coral pushed darker/more saturated for
+     destructive actions (delete, remove, X buttons) so it still reads as
+     "logo red" while remaining legible. Warmup shifted to amber so it
+     doesn't collide visually with the new danger red. Success stays
+     universal green. */
+  --accent: #237286;
+  --accent-bg: #e6f2f4;
   --success: #1d9e75;
   --success-bg: #e1f5ee;
-  --danger: #d8462f;
-  --danger-bg: #fbeae6;
-  --warmup: #c8562e;
-  --warmup-bg: #fbeae0;
+  --danger: #d34b22;
+  --danger-bg: #fce8df;
+  --warmup: #b17025;
+  --warmup-bg: #f8ecdd;
 
   /* Type scale */
   --fs-2xs: 11px;
@@ -420,15 +424,15 @@ input:focus, select:focus, textarea:focus {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-3);
+  border: 1px solid var(--danger-bg);
+  background: var(--danger-bg);
+  color: var(--danger);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .set-remove-btn svg { width: 14px; height: 14px; }
-.set-remove-btn:active { background: var(--surface-2); }
+.set-remove-btn:active { background: var(--danger-bg); opacity: 0.7; }
 
 .exercise-block { margin-bottom: 20px; }
 .exercise-block .ex-header {

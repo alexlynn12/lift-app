@@ -884,7 +884,7 @@
               </div>
               <div class="ex-header-actions">
                 <button class="ex-menu-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">${ICONS.kebab}</button>
-                <button class="icon-btn" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
+                <button class="icon-btn icon-btn-danger" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
               </div>
             </div>
             <table class="set-table">
@@ -980,7 +980,7 @@
           </div>
           <div class="ex-header-actions">
             <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">${ICONS.kebab}</button>
-            <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
+            <button class="icon-btn icon-btn-danger" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
         </div>
         <table class="set-table">
