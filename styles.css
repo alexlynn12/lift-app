@@ -299,6 +299,7 @@ input:focus, select:focus, textarea:focus {
 .badge-accent { background: var(--accent-bg); color: var(--accent); }
 .badge-success { background: var(--success-bg); color: var(--success); }
 .badge-muted { background: var(--surface-2); color: var(--text-2); }
+.badge-effort { background: var(--chart-weight-soft); color: var(--chart-weight); }
 
 /* Top app bar */
 .topbar {
@@ -1061,6 +1062,19 @@ input:focus, select:focus, textarea:focus {
 }
 .complete-title { font-size: var(--fs-lg); font-weight: var(--fw-bold); margin-bottom: 4px; text-align: center; }
 .complete-subtitle { font-size: var(--fs-base); color: var(--text-2); margin-bottom: 24px; text-align: center; }
+
+/* Effort score ring — teal-to-orange gradient matches the same icon
+   palette used by the exercise progress chart, so the two "brand moment"
+   visuals in the app read as a pair. */
+.effort-ring-wrap { position: relative; width: 148px; height: 148px; margin-bottom: 20px; }
+.effort-ring-svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.effort-ring-track { fill: none; stroke: var(--surface-2); stroke-width: 10; }
+.effort-ring-progress { fill: none; stroke: url(#effortRingGrad); stroke-width: 10; stroke-linecap: round; }
+.effort-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.effort-ring-value { font-size: 32px; font-weight: var(--fw-bold); color: var(--text); line-height: 1; }
+.effort-ring-pct { font-size: 16px; font-weight: var(--fw-medium); color: var(--text-2); margin-left: 1px; }
+.effort-ring-label { font-size: var(--fs-2xs); font-weight: var(--fw-medium); color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
+
 .complete-stats {
   display: grid;
   grid-template-columns: 1fr 1fr;

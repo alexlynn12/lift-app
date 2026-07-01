@@ -5,7 +5,7 @@
 
   // ---------- Global state ----------
   const state = {
-    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90, hapticsEnabled: true },
+    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90, hapticsEnabled: true, bodyWeightLb: null },
     customExercises: [],
     routines: [],
     workouts: [],
@@ -208,11 +208,16 @@
       DB.getAll("workouts"),
       DB.kvGet("activeWorkout", null),
     ]);
-    if (settings) state.settings = settings;
+    // Merge (not replace) so new setting fields added after someone's first
+    // install — like bodyWeightLb — still get their default instead of
+    // coming back undefined for existing saved settings blobs.
+    if (settings) state.settings = { ...state.settings, ...settings };
     state.customExercises = customExercises || [];
     state.routines = routines || [];
     state.workouts = (workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     state.activeWorkout = activeWorkout;
+
+    await backfillEffortScores();
 
     const savedTimer = await DB.kvGet("restTimer", null);
     if (savedTimer && savedTimer.endTime > Date.now()) {
@@ -433,6 +438,16 @@
     });
   }
 
+  // Most recent effort score logged for a routine (template), so its card
+  // on Home can show "Last: NN% effort" — state.workouts is already sorted
+  // newest-first, so the first match is the most recent one.
+  function lastEffortForRoutine(routineId) {
+    for (const w of state.workouts) {
+      if (w.routineId === routineId && typeof w.effortScore === "number") return w.effortScore;
+    }
+    return null;
+  }
+
   function bestWeightFor(exerciseId, excludeWorkoutId) {
     let best = 0;
     for (const w of state.workouts) {
@@ -449,6 +464,170 @@
   function estOneRm(weightLb, reps) {
     if (!reps || reps <= 0) return weightLb;
     return weightLb * (1 + reps / 30);
+  }
+
+  // ---------- Effort scoring ----------
+  // Every completed workout gets a 0-100 "effort score" that blends three
+  // things: how much weight/reps you actually moved (volume), how close
+  // each set was to your all-time best for that exercise (intensity — so
+  // grinding near a PR outranks easy-weight volume), and how inherently
+  // demanding the exercise itself is (a squat taxes far more than a curl,
+  // even at the "same" relative intensity). The score is normalized
+  // against your own historical best, so it self-calibrates as you get
+  // stronger instead of chasing a fixed, arbitrary ceiling.
+
+  // Difficulty is a heuristic (equipment x muscle-mass x movement pattern),
+  // not a manual lookup table, so it applies automatically to custom
+  // exercises too. It's intentionally approximate — the goal is "mostly
+  // right on average," not a perfect biomechanics model.
+  const MUSCLE_DIFFICULTY = {
+    "Full Body": 1.25, Legs: 1.15, Back: 1.1, Chest: 1.05, Glutes: 1.05,
+    Shoulders: 1.0, Core: 0.9, Biceps: 0.85, Triceps: 0.85, Calves: 0.85, Forearms: 0.8,
+  };
+  const EQUIPMENT_DIFFICULTY = {
+    Barbell: 1.15, Kettlebell: 1.1, Dumbbell: 1.05, Bodyweight: 1.05,
+    Cable: 0.95, Other: 0.9, Machine: 0.85, Band: 0.8,
+  };
+  // Checked in order: an unambiguous "very high" match wins first, then
+  // isolation-style words are checked (so e.g. "Leg press calf raise"
+  // reads as an isolation calf move, not a high-effort press), then
+  // everything else compound-ish, then a moderate default.
+  const MOVEMENT_VERY_HIGH = ["deadlift", "squat", "clean and jerk", "snatch", "power clean", "thruster", "clean"];
+  const MOVEMENT_LOW = ["curl", "extension", "lateral raise", "front raise", "calf raise", "fly", "flye", "kickback", "pushdown", "shrug", "crunch", "sit-up", "v-up", "plank", "pinch", "wrist"];
+  const MOVEMENT_HIGH = ["hyperextension", "rack pull", "farmer", "carry", "kettlebell swing", "swing", "turkish get-up", "get-up", "burpee", "box jump", "jump", "battle rope", "press", "row", "pull-up", "chin-up", "pulldown", "dip", "lunge", "step-up", "hip thrust", "good morning"];
+
+  function movementFactor(name) {
+    const n = (name || "").toLowerCase();
+    if (MOVEMENT_VERY_HIGH.some((k) => n.includes(k))) return 1.3;
+    if (MOVEMENT_LOW.some((k) => n.includes(k))) return 0.85;
+    if (MOVEMENT_HIGH.some((k) => n.includes(k))) return 1.15;
+    return 1.0;
+  }
+
+  function exerciseDifficulty(ex) {
+    if (!ex) return 1.0;
+    const muscle = MUSCLE_DIFFICULTY[ex.muscle] ?? 1.0;
+    const equipment = EQUIPMENT_DIFFICULTY[ex.equipment] ?? 1.0;
+    const movement = movementFactor(ex.name);
+    return Math.max(0.65, Math.min(1.65, muscle * equipment * movement));
+  }
+
+  // Best-ever estimated 1RM for an exercise across all completed history
+  // (working sets only — warmups don't count toward a PR).
+  function bestE1rmAllTime(exerciseId) {
+    let best = 0;
+    for (const w of state.workouts) {
+      const ex = w.exercises.find((e) => e.exerciseId === exerciseId);
+      if (!ex) continue;
+      for (const s of ex.sets) {
+        if (!s.completed || s.isWarmup) continue;
+        const e1rm = estOneRm(s.weight || 0, s.reps);
+        if (e1rm > best) best = e1rm;
+      }
+    }
+    return best;
+  }
+
+  // Assumed effort-intensity for the very first time you ever log an
+  // exercise, when there's no personal-best history yet to compare against.
+  const NEW_EXERCISE_INTENSITY = 0.7;
+  // Fallback body weight (lb) used for bodyweight exercises if the person
+  // hasn't entered their real body weight in Settings yet.
+  const DEFAULT_BODYWEIGHT_LB = 150;
+
+  function effectiveLoad(set, ex) {
+    const weight = set.weight || 0;
+    if (ex && ex.equipment === "Bodyweight") {
+      return weight + (state.settings.bodyWeightLb || DEFAULT_BODYWEIGHT_LB);
+    }
+    return weight;
+  }
+
+  // Per-set contribution to a workout's effort score. Warmups and empty
+  // sets contribute nothing. Intensity is this set's estimated 1RM as a
+  // fraction of your all-time best for the exercise (capped so one huge
+  // PR set doesn't dominate the whole workout), so the same rep count
+  // scores higher when it's genuinely close to your limit.
+  function computeSetEffort(set, ex, bestE1rm) {
+    if (!set || !set.completed || set.isWarmup) return 0;
+    const reps = set.reps || 0;
+    if (reps <= 0) return 0;
+    const load = effectiveLoad(set, ex);
+    const thisE1rm = estOneRm(load, reps);
+    const intensity = bestE1rm > 0
+      ? Math.max(0.3, Math.min(1.3, thisE1rm / bestE1rm))
+      : NEW_EXERCISE_INTENSITY;
+    return reps * intensity * exerciseDifficulty(ex);
+  }
+
+  // Raw (unbounded) effort total for a set of exercises, e.g. the working
+  // sets logged in one workout.
+  function computeWorkoutEffort(exercises) {
+    let raw = 0;
+    for (const e of exercises) {
+      const ex = exerciseById(e.exerciseId);
+      if (!ex) continue;
+      const best = bestE1rmAllTime(e.exerciseId);
+      for (const s of e.sets) raw += computeSetEffort(s, ex, best);
+    }
+    return raw;
+  }
+
+  // Converts a raw effort total into a 0-100 score by comparing it against
+  // the hardest workout on record so far (state.workouts must reflect only
+  // *prior* workouts when this is called — see finishWorkout). Your
+  // toughest session to date always reads ~100; everything else scales
+  // relative to it, so the score self-calibrates as you progress instead
+  // of chasing a fixed, arbitrary number.
+  function effortScoreFromRaw(raw) {
+    let bestPrior = 0;
+    for (const w of state.workouts) {
+      if (typeof w.effortRaw === "number" && w.effortRaw > bestPrior) bestPrior = w.effortRaw;
+    }
+    const denom = Math.max(raw, bestPrior) || 1;
+    return Math.round((raw / denom) * 100);
+  }
+
+  function effortCaption(score, hasPr) {
+    if (score >= 90) return "One of your hardest sessions yet.";
+    if (hasPr) return "Strong work — you're getting stronger.";
+    if (score < 35) return "A lighter session — recovery is progress too.";
+    return "You showed up today. That's what counts.";
+  }
+
+  // One-time migration: back-fills effortRaw/effortScore for workouts
+  // logged before this feature existed, so history isn't left blank.
+  // Walked chronologically (oldest first) so each workout's score is only
+  // ever judged against what had actually happened by that point in time.
+  async function backfillEffortScores() {
+    if (state.workouts.length === 0) return;
+    if (state.workouts.every((w) => typeof w.effortRaw === "number")) return;
+    const chron = [...state.workouts].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const bestE1rmSoFar = {};
+    let bestRawSoFar = 0;
+    for (const w of chron) {
+      if (typeof w.effortRaw !== "number") {
+        let raw = 0;
+        for (const e of w.exercises) {
+          const ex = exerciseById(e.exerciseId);
+          if (!ex) continue;
+          const priorBest = bestE1rmSoFar[e.exerciseId] || 0;
+          for (const s of e.sets) raw += computeSetEffort(s, ex, priorBest);
+        }
+        const denom = Math.max(raw, bestRawSoFar) || 1;
+        w.effortRaw = raw;
+        w.effortScore = Math.round((raw / denom) * 100);
+        await DB.put("workouts", w);
+      }
+      if (w.effortRaw > bestRawSoFar) bestRawSoFar = w.effortRaw;
+      for (const e of w.exercises) {
+        for (const s of e.sets) {
+          if (!s.completed || s.isWarmup) continue;
+          const e1rm = estOneRm(s.weight || 0, s.reps);
+          if (e1rm > (bestE1rmSoFar[e.exerciseId] || 0)) bestE1rmSoFar[e.exerciseId] = e1rm;
+        }
+      }
+    }
   }
 
   function startWorkout(routine) {
@@ -496,6 +675,12 @@
       if (maxThis > prevBest) prCount++;
     }
 
+    // Effort score must be computed while state.workouts still only holds
+    // *prior* workouts (bestE1rmAllTime / effortScoreFromRaw both scan it),
+    // so this has to happen before the unshift below.
+    const effortRaw = computeWorkoutEffort(cleanExercises);
+    const effortScore = effortScoreFromRaw(effortRaw);
+
     const record = {
       id: w.id,
       name: w.name,
@@ -504,6 +689,8 @@
       durationSec,
       exercises: cleanExercises,
       prCount,
+      effortRaw,
+      effortScore,
     };
     await DB.put("workouts", record);
     state.workouts.unshift(record);
@@ -582,17 +769,20 @@
           <h3 style="margin:0;">Routines</h3>
         </div>
         ${state.routines.length === 0 ? emptyStateHtml("No routines yet", "Create one to pre-load your sets each session.", "routines") : ""}
-        ${state.routines.map((r) => `
+        ${state.routines.map((r) => {
+          const lastEffort = lastEffortForRoutine(r.id);
+          return `
           <div class="card card-tap" data-action="open-routine" data-id="${r.id}">
             <div class="row">
               <div>
                 <div style="font-weight:700;">${escapeHtml(r.name)}</div>
-                <div class="small muted">${r.exercises.length} exercise${r.exercises.length === 1 ? "" : "s"}</div>
+                <div class="small muted">${r.exercises.length} exercise${r.exercises.length === 1 ? "" : "s"}${lastEffort != null ? ` · Last: ${lastEffort}% effort` : ""}</div>
               </div>
               <button class="btn btn-sm btn-accent" data-action="start-routine" data-id="${r.id}">Start</button>
             </div>
           </div>
-        `).join("")}
+        `;
+        }).join("")}
         <button class="fab-add" data-action="new-routine">+ New routine</button>
       </div>
 
@@ -640,6 +830,7 @@
               <div class="small muted">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}</div>
             </div>
             <div class="row-gap">
+              ${typeof w.effortScore === "number" ? `<span class="badge badge-effort">${w.effortScore}% effort</span>` : ""}
               ${w.prCount ? `<span class="badge badge-success">${w.prCount} PR${w.prCount > 1 ? "s" : ""}</span>` : ""}
               <button class="icon-btn icon-btn-danger" data-action="delete-workout" data-id="${w.id}" aria-label="Delete workout">Delete</button>
             </div>
@@ -958,6 +1149,22 @@
       </div>
 
       <div class="section">
+        <h3>Body weight</h3>
+        <div class="card">
+          <div class="row">
+            <span>Your body weight</span>
+            <div class="row-gap">
+              <input type="text" inputmode="decimal" id="bodyweight-input" data-action="set-bodyweight"
+                value="${s.bodyWeightLb ? weightToDisplay(s.bodyWeightLb) : ""}" placeholder="${DEFAULT_BODYWEIGHT_LB}"
+                style="width:64px; text-align:right; font-weight:700; border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface);" />
+              <span class="muted small">${unitLabel()}</span>
+            </div>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">Used to score bodyweight exercises (push-ups, pull-ups, planks) in your effort score. Without this we assume ${DEFAULT_BODYWEIGHT_LB} lb.</div>
+        </div>
+      </div>
+
+      <div class="section">
         <h3>Rest timer</h3>
         <div class="card">
           <div class="row">
@@ -1192,24 +1399,66 @@
     if (!w) { navigate("home"); return; }
     const setCount = w.exercises.reduce((n, e) => n + e.sets.length, 0);
     const hasPr = w.prCount > 0;
+    const hasEffort = typeof w.effortScore === "number";
     appEl.innerHTML = `
       <div class="complete-wrap">
         <div class="complete-icon">${ICONS.check}</div>
         <div class="complete-title">Workout complete</div>
         <div class="complete-subtitle">${escapeHtml(w.name)} · ${fmtDate(w.date)}</div>
-        ${hasPr ? `<div class="complete-pr-banner">🎉 ${w.prCount} new PR${w.prCount > 1 ? "s" : ""} today</div>` : ""}
+        ${hasEffort ? renderEffortRing(w.effortScore) : ""}
+        ${hasPr ? `<div class="complete-pr-banner">${w.prCount} new PR${w.prCount > 1 ? "s" : ""} today</div>` : ""}
         <div class="complete-stats">
           <div class="stat-card"><div class="stat-label">Duration</div><div class="stat-value">${fmtDuration(w.durationSec)}</div></div>
           <div class="stat-card"><div class="stat-label">Volume</div><div class="stat-value">${totalVolume(w)} ${unitLabel()}</div></div>
           <div class="stat-card"><div class="stat-label">Sets logged</div><div class="stat-value">${setCount}</div></div>
           <div class="stat-card"><div class="stat-label">Exercises</div><div class="stat-value">${w.exercises.length}</div></div>
         </div>
-        <div class="small muted" style="text-align:center;">${hasPr ? "Strong work — you're getting stronger." : "You showed up today. That's what counts."}</div>
+        <div class="small muted" style="text-align:center;">${escapeHtml(effortCaption(hasEffort ? w.effortScore : 0, hasPr))}</div>
         <div class="complete-actions">
           <button class="btn btn-primary" data-action="complete-done">Done</button>
         </div>
       </div>
     `;
+    if (hasEffort) initEffortRing(document.getElementById("effort-ring"));
+  }
+
+  // Renders a circular progress ring (teal -> orange, matching the app
+  // icon's palette) with the effort score centered inside it. Markup only
+  // — call initEffortRing after inserting it into the DOM to animate the
+  // fill and get a crisp "counting up" feel instead of popping in static.
+  function renderEffortRing(score) {
+    const r = 52, c = 2 * Math.PI * r;
+    return `
+      <div class="effort-ring-wrap" id="effort-ring" data-score="${score}">
+        <svg viewBox="0 0 120 120" class="effort-ring-svg" role="img" aria-label="Effort score ${score} out of 100">
+          <defs>
+            <linearGradient id="effortRingGrad" x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0%" stop-color="var(--chart-weight)" />
+              <stop offset="100%" stop-color="var(--chart-time)" />
+            </linearGradient>
+          </defs>
+          <circle cx="60" cy="60" r="${r}" class="effort-ring-track" />
+          <circle cx="60" cy="60" r="${r}" class="effort-ring-progress" stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${c.toFixed(2)}" />
+        </svg>
+        <div class="effort-ring-center">
+          <div class="effort-ring-value">${score}<span class="effort-ring-pct">%</span></div>
+          <div class="effort-ring-label">Effort</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function initEffortRing(container) {
+    if (!container) return;
+    const score = Math.max(0, Math.min(100, parseFloat(container.dataset.score) || 0));
+    const circle = container.querySelector(".effort-ring-progress");
+    const r = 52, c = 2 * Math.PI * r;
+    const target = c * (1 - score / 100);
+    void container.getBoundingClientRect();
+    requestAnimationFrame(() => {
+      circle.style.transition = "stroke-dashoffset 0.9s cubic-bezier(0.65, 0, 0.35, 1)";
+      circle.style.strokeDashoffset = `${target}`;
+    });
   }
 
   function renderWorkoutDetail(params) {
@@ -1218,7 +1467,7 @@
     appEl.innerHTML = `
       <div class="topbar"><button class="back-btn" data-action="back">‹ Back</button></div>
       <h1>${escapeHtml(w.name)}</h1>
-      <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}${w.prCount ? ` · ${w.prCount} PR${w.prCount > 1 ? "s" : ""}` : ""}</div>
+      <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}${typeof w.effortScore === "number" ? ` · ${w.effortScore}% effort` : ""}${w.prCount ? ` · ${w.prCount} PR${w.prCount > 1 ? "s" : ""}` : ""}</div>
       ${w.exercises.map((ex) => {
         let workingNum = 0;
         return `
@@ -1410,6 +1659,9 @@
       const s = re.sets[parseInt(t.dataset.setidx, 10)];
       if (action === "routine-set-weight") s.weight = t.value === "" ? "" : weightFromDisplay(t.value);
       else s.reps = t.value === "" ? "" : (parseInt(t.value, 10) || 0);
+    } else if (action === "set-bodyweight") {
+      state.settings.bodyWeightLb = t.value === "" ? null : weightFromDisplay(t.value);
+      saveSettings();
     }
   }
 
