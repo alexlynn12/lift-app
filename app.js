@@ -2269,7 +2269,11 @@
     if (!location.hash) location.hash = "#home";
     render();
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("sw.js").catch(() => {});
+      // updateViaCache: "none" stops the browser from ever serving sw.js
+      // itself out of HTTP cache when checking for a new version, so a new
+      // deploy is picked up the moment the app is reopened rather than
+      // waiting out GitHub Pages' cache-control window.
+      navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => {});
     }
     // Ask the browser not to auto-evict this site's storage under disk
     // pressure. Best-effort only — unsupported or denied silently no-ops.

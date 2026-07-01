@@ -35,8 +35,13 @@ self.addEventListener("fetch", (e) => {
     (url.pathname.endsWith("/") || SHELL_NAMES.some((n) => url.pathname.endsWith("/" + n)));
 
   if (isAppShell) {
+    // "no-store" bypasses the browser's own HTTP disk cache (GitHub Pages
+    // sends cache-control: max-age=600 on these files), so this always hits
+    // the network when online instead of silently reusing a stale response
+    // from earlier in that 10-minute window. Falls back to the SW's own
+    // Cache Storage copy only when the network is unreachable (offline).
     e.respondWith(
-      fetch(e.request)
+      fetch(e.request, { cache: "no-store" })
         .then((networkResponse) => {
           if (networkResponse && networkResponse.ok) {
             const clone = networkResponse.clone();
@@ -51,7 +56,7 @@ self.addEventListener("fetch", (e) => {
 
   e.respondWith(
     caches.match(e.request).then((cached) => {
-      const fetchPromise = fetch(e.request)
+      const fetchPromise = fetch(e.request, { cache: "no-store" })
         .then((networkResponse) => {
           if (networkResponse && networkResponse.ok) {
             const clone = networkResponse.clone();
