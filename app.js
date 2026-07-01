@@ -5,7 +5,7 @@
 
   // ---------- Global state ----------
   const state = {
-    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90 },
+    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90, hapticsEnabled: true },
     customExercises: [],
     routines: [],
     workouts: [],
@@ -127,6 +127,47 @@
 
   window.addEventListener("hashchange", render);
 
+  // ---------- Haptics ----------
+  // Vibration API is Android-only — iOS Safari (including installed PWAs)
+  // has no web API for the Taptic Engine, so this silently no-ops there.
+  function vibrateTap() {
+    if (state.settings.hapticsEnabled !== false && navigator.vibrate) {
+      navigator.vibrate(10);
+    }
+  }
+
+  // ---------- Notifications ----------
+  function notificationStatus() {
+    if (!("Notification" in window)) return { label: "Not supported", cls: "badge-muted", canRequest: false };
+    if (Notification.permission === "granted") return { label: "Enabled", cls: "badge-success", canRequest: false };
+    if (Notification.permission === "denied") return { label: "Blocked", cls: "badge-muted", canRequest: false };
+    return { label: "Not enabled", cls: "badge-muted", canRequest: true };
+  }
+
+  async function requestNotificationPermission() {
+    if (!("Notification" in window)) { showToast("Notifications aren't supported in this browser"); return; }
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm === "granted") showToast("Notifications enabled");
+      else if (perm === "denied") showToast("Blocked — enable in Settings > Notifications");
+    } catch (e) { /* ignore */ }
+    render();
+  }
+
+  async function notifyRestDone(exerciseName) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const title = "Rest complete";
+    const body = exerciseName ? `Time for your next set — ${exerciseName}` : "Time for your next set";
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        reg.showNotification(title, { body, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "rest-timer", renotify: true });
+      } else {
+        new Notification(title, { body, icon: "icons/icon-192.png" });
+      }
+    } catch (e) { /* notifications unavailable */ }
+  }
+
   // ---------- Rest timer ----------
   function beep() {
     try {
@@ -174,6 +215,7 @@
       const remaining = (restTimer.endTime - Date.now()) / 1000;
       if (remaining <= 0) {
         beep();
+        notifyRestDone(restTimer.exerciseName);
         restTimer.endTime = null;
         saveRestTimer();
         renderRestBar();
@@ -201,9 +243,9 @@
     }
   }
 
-  document.getElementById("rest-minus").addEventListener("click", () => adjustRest(-15));
-  document.getElementById("rest-plus").addEventListener("click", () => adjustRest(15));
-  document.getElementById("rest-skip").addEventListener("click", skipRest);
+  document.getElementById("rest-minus").addEventListener("click", () => { vibrateTap(); adjustRest(-15); });
+  document.getElementById("rest-plus").addEventListener("click", () => { vibrateTap(); adjustRest(15); });
+  document.getElementById("rest-skip").addEventListener("click", () => { vibrateTap(); skipRest(); });
 
   // ---------- Set / workout helpers ----------
   function lastCompletedWorkoutFor(exerciseId, excludeWorkoutId) {
@@ -542,6 +584,7 @@
 
   function renderSettings() {
     const s = state.settings;
+    const notif = notificationStatus();
     appEl.innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
 
@@ -579,6 +622,32 @@
             </div>
           </div>
           <div class="tiny muted" style="margin-top:8px;">Rest starts automatically whenever you mark a set complete. Each exercise can override this during a workout.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Notifications</h3>
+        <div class="card">
+          <div class="row">
+            <span>Rest timer alerts</span>
+            <span class="badge ${notif.cls}">${notif.label}</span>
+          </div>
+          ${notif.canRequest ? `<button class="btn" style="margin-top:10px;" data-action="enable-notifications">Enable notifications</button>` : ""}
+          <div class="tiny muted" style="margin-top:8px;">On iPhone, you need to add Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Haptics</h3>
+        <div class="card">
+          <div class="row">
+            <span>Vibrate on tap</span>
+            <div class="segmented" style="width:120px;">
+              <button data-action="set-haptics" data-value="on" class="${s.hapticsEnabled !== false ? "active" : ""}">On</button>
+              <button data-action="set-haptics" data-value="off" class="${s.hapticsEnabled === false ? "active" : ""}">Off</button>
+            </div>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">Works on Android. iPhone Safari doesn't give web apps access to haptics, so this has no effect on iOS.</div>
         </div>
       </div>
 
@@ -724,6 +793,7 @@
     if (!t) return;
     const action = t.dataset.action;
     const { route } = parseHash();
+    vibrateTap();
 
     switch (action) {
       case "back": history.back(); break;
@@ -755,6 +825,11 @@
         state.settings.defaultRestSec = Math.max(0, state.settings.defaultRestSec + parseInt(t.dataset.delta, 10));
         saveSettings(); render();
         break;
+      case "set-haptics":
+        state.settings.hapticsEnabled = t.dataset.value === "on";
+        saveSettings(); render();
+        break;
+      case "enable-notifications": requestNotificationPermission(); break;
       case "export-data": exportData(); break;
       case "reset-data": resetData(); break;
 
@@ -965,13 +1040,14 @@
     }
   }
 
-  document.getElementById("picker-close").addEventListener("click", closeExercisePicker);
+  document.getElementById("picker-close").addEventListener("click", () => { vibrateTap(); closeExercisePicker(); });
   document.getElementById("picker-search").addEventListener("input", renderPickerList);
   document.getElementById("picker-filter-muscle").addEventListener("change", renderPickerList);
   document.getElementById("picker-filter-equipment").addEventListener("change", renderPickerList);
   document.getElementById("picker-list").addEventListener("click", (e) => {
     const row = e.target.closest('[data-action="picker-select"]');
     if (!row) return;
+    vibrateTap();
     confirmPickerSelection(row.dataset.id);
   });
   document.getElementById("picker-index").addEventListener("click", (e) => {
@@ -1035,7 +1111,7 @@
 
   // ---------- Init ----------
   document.querySelectorAll(".tab").forEach((tab) => {
-    tab.addEventListener("click", () => navigate(tab.dataset.route));
+    tab.addEventListener("click", () => { vibrateTap(); navigate(tab.dataset.route); });
   });
 
   (async function init() {
