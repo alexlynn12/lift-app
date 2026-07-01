@@ -610,8 +610,34 @@
     return reps * intensity * exerciseDifficulty(ex) * heightFactor;
   }
 
+  // How "complete" a session is, independent of how hard any single set
+  // was — a single all-out exercise isn't great for overall growth the
+  // way a fuller, more varied session is, so this discounts sessions that
+  // are narrow in either sense:
+  //   - exerciseCount: how many distinct exercises were performed
+  //   - muscleGroups: how many distinct muscle groups those exercises hit
+  // Both saturate (more isn't better past a normal, complete session —
+  // this isn't a reward for cramming in 15 exercises), and muscle-group
+  // variety is weighted higher than raw exercise count since it's the
+  // more direct "different exercises worked" signal. A single exercise
+  // hitting a single muscle group lands around 0.3; a well-rounded
+  // 4+-exercise, 3+-muscle-group session hits the full 1.0.
+  function workoutCoverage(exercises) {
+    if (!exercises || exercises.length === 0) return 0;
+    const muscles = new Set();
+    for (const e of exercises) {
+      const ex = exerciseById(e.exerciseId);
+      if (ex) muscles.add(ex.muscle);
+    }
+    const countFactor = Math.min(1, exercises.length / 4);
+    const muscleFactor = Math.min(1, muscles.size / 3);
+    return 0.4 * countFactor + 0.6 * muscleFactor;
+  }
+
   // Raw (unbounded) effort total for a set of exercises, e.g. the working
-  // sets logged in one workout.
+  // sets logged in one workout — discounted by how complete the session
+  // was (see workoutCoverage) so a single hard-hit exercise doesn't
+  // out-rank a fuller, more balanced workout just because it was heavier.
   function computeWorkoutEffort(exercises) {
     let raw = 0;
     for (const e of exercises) {
@@ -620,7 +646,7 @@
       const best = bestE1rmAllTime(e.exerciseId);
       for (const s of e.sets) raw += computeSetEffort(s, ex, best);
     }
-    return raw;
+    return raw * workoutCoverage(exercises);
   }
 
   // Converts a raw effort total into a 0-100 score by comparing it against
@@ -638,25 +664,47 @@
     return Math.round((raw / denom) * 100);
   }
 
-  function effortCaption(score, hasPr) {
+  // Coverage discounts the raw score going into that historical
+  // comparison above, which handles things fairly once there's real
+  // history to compare against — but the very first workout you ever log
+  // has nothing to compare against, so it would otherwise trivially read
+  // 100% no matter how narrow it was. This hard-caps the *displayed*
+  // score at what the session's coverage alone would justify, so a
+  // single-exercise session can never read as near-total effort,
+  // regardless of what it's being compared to.
+  function finalEffortScore(raw, exercises) {
+    const relative = effortScoreFromRaw(raw);
+    const cap = Math.round(workoutCoverage(exercises) * 100);
+    return Math.min(relative, cap);
+  }
+
+  function effortCaption(score, hasPr, coverage) {
+    if (coverage < 0.5) return "Solid work — a fuller session (more exercises or muscle groups) will push your effort score higher.";
     if (score >= 90) return "One of your hardest sessions yet.";
     if (hasPr) return "Strong work — you're getting stronger.";
     if (score < 35) return "A lighter session — recovery is progress too.";
     return "You showed up today. That's what counts.";
   }
 
-  // One-time migration: back-fills effortRaw/effortScore for workouts
-  // logged before this feature existed, so history isn't left blank.
-  // Walked chronologically (oldest first) so each workout's score is only
-  // ever judged against what had actually happened by that point in time.
+  // Bump this whenever the effort formula changes meaningfully, so
+  // existing history gets recomputed under the new rules instead of
+  // being stuck with scores from an old formula (see backfillEffortScores).
+  const EFFORT_SCORE_VERSION = 2;
+
+  // One-time-per-version migration: (re)computes effortRaw/effortScore for
+  // any workout that either predates this feature or was scored under an
+  // older formula version, so history isn't left blank or inconsistent
+  // with how new workouts get scored. Walked chronologically (oldest
+  // first) so each workout's score is only ever judged against what had
+  // actually happened by that point in time.
   async function backfillEffortScores() {
     if (state.workouts.length === 0) return;
-    if (state.workouts.every((w) => typeof w.effortRaw === "number")) return;
+    if (state.workouts.every((w) => w.effortVersion === EFFORT_SCORE_VERSION)) return;
     const chron = [...state.workouts].sort((a, b) => new Date(a.date) - new Date(b.date));
     const bestE1rmSoFar = {};
     let bestRawSoFar = 0;
     for (const w of chron) {
-      if (typeof w.effortRaw !== "number") {
+      if (w.effortVersion !== EFFORT_SCORE_VERSION) {
         let raw = 0;
         for (const e of w.exercises) {
           const ex = exerciseById(e.exerciseId);
@@ -664,9 +712,13 @@
           const priorBest = bestE1rmSoFar[e.exerciseId] || 0;
           for (const s of e.sets) raw += computeSetEffort(s, ex, priorBest);
         }
+        const coverage = workoutCoverage(w.exercises);
+        raw *= coverage;
         const denom = Math.max(raw, bestRawSoFar) || 1;
+        const relative = Math.round((raw / denom) * 100);
         w.effortRaw = raw;
-        w.effortScore = Math.round((raw / denom) * 100);
+        w.effortScore = Math.min(relative, Math.round(coverage * 100));
+        w.effortVersion = EFFORT_SCORE_VERSION;
         await DB.put("workouts", w);
       }
       if (w.effortRaw > bestRawSoFar) bestRawSoFar = w.effortRaw;
@@ -729,7 +781,7 @@
     // *prior* workouts (bestE1rmAllTime / effortScoreFromRaw both scan it),
     // so this has to happen before the unshift below.
     const effortRaw = computeWorkoutEffort(cleanExercises);
-    const effortScore = effortScoreFromRaw(effortRaw);
+    const effortScore = finalEffortScore(effortRaw, cleanExercises);
 
     const record = {
       id: w.id,
@@ -741,6 +793,7 @@
       prCount,
       effortRaw,
       effortScore,
+      effortVersion: EFFORT_SCORE_VERSION,
     };
     await DB.put("workouts", record);
     state.workouts.unshift(record);
@@ -1473,7 +1526,7 @@
           <div class="stat-card"><div class="stat-label">Sets logged</div><div class="stat-value">${setCount}</div></div>
           <div class="stat-card"><div class="stat-label">Exercises</div><div class="stat-value">${w.exercises.length}</div></div>
         </div>
-        <div class="small muted" style="text-align:center;">${escapeHtml(effortCaption(hasEffort ? w.effortScore : 0, hasPr))}</div>
+        <div class="small muted" style="text-align:center;">${escapeHtml(effortCaption(hasEffort ? w.effortScore : 0, hasPr, workoutCoverage(w.exercises)))}</div>
         <div class="complete-actions">
           <button class="btn btn-primary" data-action="complete-done">Done</button>
         </div>
