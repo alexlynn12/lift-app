@@ -961,15 +961,18 @@
   }
 
   function equipmentIcon(equipment) {
-    const icons = {
-      Barbell: `<circle cx="5" cy="12" r="2.6"/><line x1="7.6" y1="12" x2="16.4" y2="12"/><circle cx="19" cy="12" r="2.6"/>`,
-      Dumbbell: `<rect x="3" y="9" width="3" height="6" rx="1"/><rect x="18" y="9" width="3" height="6" rx="1"/><line x1="6" y1="12" x2="18" y2="12"/>`,
-      Cable: `<circle cx="12" cy="6" r="2.2"/><line x1="12" y1="8.2" x2="12" y2="14"/><line x1="12" y1="14" x2="7" y2="20"/><line x1="12" y1="14" x2="17" y2="20"/>`,
-      Machine: `<rect x="5" y="4" width="14" height="6" rx="1.5"/><line x1="7" y1="10" x2="7" y2="20"/><line x1="17" y1="10" x2="17" y2="20"/>`,
-      Bodyweight: `<circle cx="12" cy="4.5" r="2.2"/><line x1="12" y1="6.7" x2="12" y2="14"/><line x1="12" y1="9" x2="7" y2="12"/><line x1="12" y1="9" x2="17" y2="12"/><line x1="12" y1="14" x2="8" y2="20"/><line x1="12" y1="14" x2="16" y2="20"/>`,
+    const files = {
+      Barbell: "barbell_icon.png",
+      Dumbbell: "dumbbell_icon.png",
+      Cable: "cable_icon.png",
+      Machine: "machine_icon.png",
+      Bodyweight: "bodyweight_icon.png",
     };
-    const inner = icons[equipment] || `<line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="6.3" y1="6.3" x2="17.7" y2="17.7"/><line x1="17.7" y1="6.3" x2="6.3" y2="17.7"/>`;
-    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+    const file = files[equipment];
+    if (file) {
+      return `<img src="icons/equipment/${file}" alt="${escapeHtml(equipment)}" class="equip-icon-img" />`;
+    }
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="4" x2="12" y2="20"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="6.3" y1="6.3" x2="17.7" y2="17.7"/><line x1="17.7" y1="6.3" x2="6.3" y2="17.7"/></svg>`;
   }
 
   function pickerRowHtml(ex) {

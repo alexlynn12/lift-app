@@ -462,6 +462,7 @@ input:focus, select:focus, textarea:focus {
   justify-content: center;
 }
 .picker-thumb svg { width: 20px; height: 20px; }
+.picker-thumb .equip-icon-img { width: 24px; height: 24px; object-fit: contain; opacity: 0.82; }
 .picker-row-text { flex: 1; min-width: 0; }
 .picker-row-name {
   display: block;
