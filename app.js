@@ -752,8 +752,8 @@
     const path = coords.map((c, i) => (i === 0 ? "M" : "L") + c[0].toFixed(1) + "," + c[1].toFixed(1)).join(" ");
     const last = coords[coords.length - 1];
     return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" role="img" aria-label="Progress chart trending over recent workouts">
-      <path d="${path}" fill="none" stroke="#2f6fed" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-      <circle cx="${last[0]}" cy="${last[1]}" r="4" fill="#2f6fed" />
+      <path d="${path}" fill="none" stroke="#0f9c90" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="${last[0]}" cy="${last[1]}" r="4" fill="#0f9c90" />
     </svg>`;
   }
 

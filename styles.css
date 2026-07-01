@@ -21,14 +21,16 @@
   --text: #1c1c1a;
   --text-2: #6b6a63;
   --text-3: #9c9a90;
-  --accent: #2f6fed;
-  --accent-bg: #e9f0ff;
+  /* Brand palette lifted from the app icon: teal for primary actions/accent,
+     coral for warmup/energy accent. Success/danger stay universal green/red. */
+  --accent: #0f9c90;
+  --accent-bg: #e2f5f2;
   --success: #1d9e75;
   --success-bg: #e1f5ee;
   --danger: #d8462f;
   --danger-bg: #fbeae6;
-  --warmup: #b3760a;
-  --warmup-bg: #fbf0d9;
+  --warmup: #c8562e;
+  --warmup-bg: #fbeae0;
 
   /* Type scale */
   --fs-2xs: 11px;
