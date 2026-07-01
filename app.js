@@ -12,7 +12,7 @@
     activeWorkout: null, // { id, name, startedAt, exercises: [{exerciseId, name, restSec, sets:[{weight,reps,completed,isWarmup}]}] }
   };
 
-  let restTimer = { endTime: null, raf: null, exerciseName: "" };
+  let restTimer = { endTime: null, raf: null, timeoutId: null, exerciseName: "" };
 
   const appEl = document.getElementById("app");
   const toastEl = document.getElementById("toast");
@@ -317,15 +317,27 @@
     renderRestBar();
   }
 
+  // Stops the countdown loop dead, right now — cancels both the pending
+  // animation frame AND the pending setTimeout it schedules (see
+  // startTimerLoop below), so there's no stray tick left in flight that
+  // could resurrect the bar or re-fire the "rest done" beep/notification
+  // a moment later.
+  function stopTimerLoop() {
+    cancelAnimationFrame(restTimer.raf);
+    clearTimeout(restTimer.timeoutId);
+    restTimer.raf = null;
+    restTimer.timeoutId = null;
+  }
+
   function skipRest() {
     restTimer.endTime = null;
     saveRestTimer();
-    cancelAnimationFrame(restTimer.raf);
+    stopTimerLoop();
     renderRestBar();
   }
 
   function startTimerLoop() {
-    cancelAnimationFrame(restTimer.raf);
+    stopTimerLoop();
     const tick = () => {
       if (!restTimer.endTime) { renderRestBar(); return; }
       const remaining = (restTimer.endTime - Date.now()) / 1000;
@@ -338,7 +350,9 @@
         return;
       }
       renderRestBar();
-      restTimer.raf = requestAnimationFrame(() => setTimeout(tick, 200));
+      restTimer.raf = requestAnimationFrame(() => {
+        restTimer.timeoutId = setTimeout(tick, 200);
+      });
     };
     tick();
   }
@@ -495,6 +509,7 @@
     state.workouts.unshift(record);
     state.activeWorkout = null;
     stopWorkoutClock();
+    skipRest();
     await DB.kvSet("activeWorkout", null);
     navigate("workout-complete", { id: record.id });
   }
@@ -502,6 +517,7 @@
   function discardWorkout() {
     state.activeWorkout = null;
     stopWorkoutClock();
+    skipRest();
     DB.kvSet("activeWorkout", null);
     navigate("home");
   }
@@ -700,8 +716,8 @@
       if (e1rm > bestE1rm) { bestE1rm = e1rm; bestSet = s; }
     }));
 
-    const chartPoints = history.filter((h) => h.workingSets.length).slice(0, 12).reverse()
-      .map((h) => Math.max(...h.workingSets.map((s) => estOneRm(s.weight, s.reps))));
+    const chartData = history.filter((h) => h.workingSets.length).slice(0, 12).reverse()
+      .map((h) => ({ date: h.date, weightLb: Math.max(...h.workingSets.map((s) => s.weight || 0)) }));
 
     appEl.innerHTML = `
       <div class="topbar">
@@ -721,7 +737,7 @@
             <div class="stat-value">${Math.round(weightToDisplay(bestE1rm))} ${unitLabel()}</div>
           </div>
         </div>
-        <div class="chart-wrap">${renderLineChart(chartPoints)}</div>
+        <div class="chart-wrap">${renderLineChart(chartData)}</div>
       ` : emptyStateHtml("No history yet", "Log this exercise in a workout to see progress.", "history")}
 
       ${history.length ? `
@@ -734,27 +750,183 @@
         `).join("")}
       ` : ""}
     `;
+
+    if (bestSet && chartData.length >= 2) initProgressChart(document.getElementById("progress-chart"), chartData);
   }
 
-  function renderLineChart(points) {
-    if (points.length < 2) {
-      return `<svg viewBox="0 0 300 140" width="100%" height="140" role="img" aria-label="Not enough data yet"></svg>`;
+  // Catmull-Rom -> cubic Bezier smoothing, so the trend line reads as one
+  // continuous, crisp curve instead of a jagged connect-the-dots line.
+  function smoothPathD(pts) {
+    if (pts.length === 2) return `M${pts[0][0]},${pts[0][1]} L${pts[1][0]},${pts[1][1]}`;
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
     }
-    const w = 300, h = 130, pad = 10;
-    const min = Math.min(...points), max = Math.max(...points);
-    const range = max - min || 1;
-    const stepX = (w - pad * 2) / (points.length - 1);
-    const coords = points.map((p, i) => {
-      const x = pad + i * stepX;
-      const y = pad + (1 - (p - min) / range) * (h - pad * 2);
-      return [x, y];
+    return d;
+  }
+
+  // Renders the weight-over-time trend chart for an exercise. Teal always
+  // encodes weight (the line + y-axis), orange always encodes time (ticks,
+  // date labels, the drag cursor) — colors sampled from the app icon.
+  function renderLineChart(data) {
+    if (data.length < 2) {
+      return `<div class="chart-empty">Log one more session to see your trend</div>`;
+    }
+    const W = 320, H = 176, padX = 14, padTop = 18, padBottom = 34;
+    const baseY = H - padBottom;
+    const disp = data.map((d) => (displayUnit() === "kg" ? lbToKg(d.weightLb) : d.weightLb));
+    const min = Math.min(...disp), max = Math.max(...disp);
+    const range = (max - min) || Math.max(max, 1) * 0.1 || 1;
+    const padRange = range * 0.18;
+    const lo = min - padRange, hi = max + padRange;
+    const span = hi - lo || 1;
+    const stepX = (W - padX * 2) / (data.length - 1);
+    const coords = disp.map((v, i) => [
+      padX + i * stepX,
+      padTop + (1 - (v - lo) / span) * (baseY - padTop),
+    ]);
+
+    const lineD = smoothPathD(coords);
+    const areaD = `${lineD} L${coords[coords.length - 1][0].toFixed(2)},${baseY} L${coords[0][0].toFixed(2)},${baseY} Z`;
+
+    const ticksAndDots = coords.map((c, i) => {
+      const isEdge = i === 0 || i === coords.length - 1;
+      const anchor = i === 0 ? "start" : i === coords.length - 1 ? "end" : "middle";
+      return `
+        <line x1="${c[0].toFixed(2)}" y1="${baseY}" x2="${c[0].toFixed(2)}" y2="${(baseY + 5).toFixed(2)}" class="chart-tick" />
+        ${isEdge ? `<text x="${c[0].toFixed(2)}" y="${H - 8}" text-anchor="${anchor}" class="chart-date-label">${escapeHtml(fmtDate(data[i].date))}</text>` : ""}
+        <circle cx="${c[0].toFixed(2)}" cy="${c[1].toFixed(2)}" r="3.4" class="chart-dot" data-i="${i}" style="--d:${i}" />
+      `;
+    }).join("");
+
+    return `
+      <div class="chart" id="progress-chart">
+        <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Weight progress over recent sessions">
+          <defs>
+            <linearGradient id="chartAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--chart-weight)" stop-opacity="0.30" />
+              <stop offset="100%" stop-color="var(--chart-weight)" stop-opacity="0" />
+            </linearGradient>
+            <filter id="chartGlowBlur" x="-30%" y="-60%" width="160%" height="220%">
+              <feGaussianBlur stdDeviation="3.4" />
+            </filter>
+          </defs>
+          <line x1="${padX}" y1="${baseY}" x2="${W - padX}" y2="${baseY}" class="chart-baseline" />
+          <path d="${areaD}" class="chart-area" />
+          <path d="${lineD}" class="chart-line-glow" />
+          <path d="${lineD}" class="chart-line" />
+          ${ticksAndDots}
+          <g class="chart-cursor">
+            <line class="chart-cursor-line" x1="0" y1="${padTop}" x2="0" y2="${baseY}" />
+            <circle class="chart-cursor-dot" r="5" cx="0" cy="0" />
+          </g>
+        </svg>
+        <div class="chart-tooltip"></div>
+      </div>
+    `;
+  }
+
+  // Wires up entrance animation + drag/hover interactivity for the chart
+  // rendered by renderLineChart. Runs once, right after the markup above
+  // is inserted into the DOM.
+  function initProgressChart(container, data) {
+    if (!container) return;
+    const svg = container.querySelector(".chart-svg");
+    const line = svg.querySelector(".chart-line");
+    const glow = svg.querySelector(".chart-line-glow");
+    const area = svg.querySelector(".chart-area");
+    const dots = Array.from(svg.querySelectorAll(".chart-dot"));
+    const cursor = svg.querySelector(".chart-cursor");
+    const cursorLine = svg.querySelector(".chart-cursor-line");
+    const cursorDot = svg.querySelector(".chart-cursor-dot");
+    const tooltip = container.querySelector(".chart-tooltip");
+
+    // Draw-on entrance: animate the line (and its glow) from fully hidden
+    // to fully revealed via stroke-dashoffset, a crisp "drawing" motion.
+    const len = line.getTotalLength();
+    [line, glow].forEach((p) => {
+      p.style.strokeDasharray = `${len}`;
+      p.style.strokeDashoffset = `${len}`;
     });
-    const path = coords.map((c, i) => (i === 0 ? "M" : "L") + c[0].toFixed(1) + "," + c[1].toFixed(1)).join(" ");
-    const last = coords[coords.length - 1];
-    return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" role="img" aria-label="Progress chart trending over recent workouts">
-      <path d="${path}" fill="none" stroke="#0f9c90" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
-      <circle cx="${last[0]}" cy="${last[1]}" r="4" fill="#0f9c90" />
-    </svg>`;
+    // Force layout so the initial dash state is committed before animating.
+    void line.getBoundingClientRect();
+    requestAnimationFrame(() => {
+      [line, glow].forEach((p) => {
+        p.style.transition = "stroke-dashoffset 0.75s cubic-bezier(0.65, 0, 0.35, 1)";
+        p.style.strokeDashoffset = "0";
+      });
+      requestAnimationFrame(() => area.classList.add("in"));
+    });
+
+    const dotCx = dots.map((d) => parseFloat(d.getAttribute("cx")));
+    const dotCy = dots.map((d) => parseFloat(d.getAttribute("cy")));
+    let activeIndex = -1;
+
+    function nearestIndex(svgX) {
+      let best = 0, bestDist = Infinity;
+      dotCx.forEach((x, i) => {
+        const dist = Math.abs(x - svgX);
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      });
+      return best;
+    }
+
+    function showAt(i) {
+      if (i === activeIndex) return;
+      const changed = activeIndex !== -1;
+      activeIndex = i;
+      dots.forEach((d, di) => d.classList.toggle("active", di === i));
+      cursorLine.setAttribute("x1", dotCx[i]);
+      cursorLine.setAttribute("x2", dotCx[i]);
+      cursorDot.setAttribute("cx", dotCx[i]);
+      cursorDot.setAttribute("cy", dotCy[i]);
+      cursor.classList.add("visible");
+
+      const weightLb = data[i].weightLb;
+      const wDisp = displayUnit() === "kg" ? lbToKg(weightLb) : weightLb;
+      tooltip.innerHTML = `<span class="tt-weight">${roundClean(wDisp)} ${unitLabel()}</span><span class="tt-date">${escapeHtml(fmtDate(data[i].date))}</span>`;
+      const rect = svg.getBoundingClientRect();
+      const scaleX = rect.width / 320, scaleY = rect.height / 176;
+      tooltip.style.left = `${dotCx[i] * scaleX}px`;
+      tooltip.style.top = `${dotCy[i] * scaleY}px`;
+      tooltip.classList.add("visible");
+      if (changed) vibrateTap();
+    }
+
+    function hideCursor() {
+      activeIndex = -1;
+      dots.forEach((d) => d.classList.remove("active"));
+      cursor.classList.remove("visible");
+      tooltip.classList.remove("visible");
+    }
+
+    function svgXFromClientX(clientX) {
+      const rect = svg.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+      return ratio * 320;
+    }
+
+    function onMove(e) {
+      const x = svgXFromClientX(e.clientX);
+      showAt(nearestIndex(x));
+    }
+
+    svg.addEventListener("pointerdown", (e) => {
+      svg.setPointerCapture(e.pointerId);
+      onMove(e);
+    });
+    svg.addEventListener("pointermove", (e) => { if (e.pressure > 0 || e.pointerType === "mouse") onMove(e); });
+    svg.addEventListener("pointerup", hideCursor);
+    svg.addEventListener("pointerleave", hideCursor);
+    svg.addEventListener("pointercancel", hideCursor);
   }
 
   function renderSettings() {
@@ -1656,6 +1828,7 @@
     state.routines = [];
     state.workouts = [];
     state.activeWorkout = null;
+    skipRest();
     navigate("home");
   }
 

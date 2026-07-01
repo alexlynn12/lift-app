@@ -36,6 +36,15 @@
   --warmup: #b17025;
   --warmup-bg: #f8ecdd;
 
+  /* Progress-chart palette — sampled directly from the app icon's teal ring
+     and orange figure, kept distinct from --accent so the chart reads as
+     its own "brand moment": teal always means weight (the y-axis), orange
+     always means time (the x-axis). */
+  --chart-weight: #17b8ab;
+  --chart-weight-soft: rgba(23, 184, 171, 0.16);
+  --chart-time: #f2884a;
+  --chart-time-soft: rgba(242, 136, 74, 0.5);
+
   /* Type scale */
   --fs-2xs: 11px;
   --fs-xs: 13px;
@@ -661,7 +670,94 @@ input:focus, select:focus, textarea:focus {
 }
 .list-row:last-child { border-bottom: none; }
 
-.chart-wrap { width: 100%; height: 140px; margin: 12px 0; }
+.chart-wrap { width: 100%; margin: 12px 0; }
+
+.chart-empty {
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  background: var(--surface-2);
+  border-radius: var(--radius);
+}
+
+.chart { position: relative; width: 100%; touch-action: pan-y; }
+.chart-svg { display: block; width: 100%; height: 176px; overflow: visible; }
+
+.chart-baseline { stroke: var(--border); stroke-width: 1; }
+.chart-tick { stroke: var(--chart-time-soft); stroke-width: 1.5; stroke-linecap: round; }
+.chart-date-label { font-size: 9px; font-weight: 500; fill: var(--chart-time); }
+
+.chart-area { fill: url(#chartAreaGrad); opacity: 0; transform: scaleY(0.85); transform-origin: bottom; transition: opacity 0.5s cubic-bezier(0.22, 1, 0.36, 1), transform 0.5s cubic-bezier(0.22, 1, 0.36, 1); }
+.chart-area.in { opacity: 1; transform: scaleY(1); }
+
+/* The soft "halation" bloom sitting directly beneath the crisp line — a
+   blurred, low-opacity duplicate of the same path, same trick used by
+   .complete-icon::before elsewhere in the app. */
+.chart-line-glow {
+  fill: none;
+  stroke: var(--chart-weight);
+  stroke-width: 7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.45;
+  filter: url(#chartGlowBlur);
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--chart-weight);
+  stroke-width: 2.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-dot {
+  fill: var(--surface);
+  stroke: var(--chart-weight);
+  stroke-width: 2.25;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(0.3);
+  animation: chartDotIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation-delay: calc(var(--d, 0) * 45ms + 420ms);
+  transition: r 0.15s cubic-bezier(0.22, 1, 0.36, 1), stroke-width 0.15s ease;
+}
+.chart-dot.active { r: 5.5; stroke-width: 2.75; }
+@keyframes chartDotIn {
+  0% { opacity: 0; transform: scale(0.3); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+.chart-cursor { opacity: 0; transition: opacity 0.18s ease; pointer-events: none; }
+.chart-cursor.visible { opacity: 1; }
+.chart-cursor-line { stroke: var(--chart-time); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.chart-cursor-dot { fill: var(--chart-weight); stroke: var(--surface); stroke-width: 2.5; }
+
+.chart-tooltip {
+  position: absolute;
+  top: 0; left: 0;
+  transform: translate(-50%, calc(-100% - 10px)) scale(0.92);
+  transform-origin: bottom center;
+  background: var(--text);
+  color: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: var(--fs-2xs);
+  white-space: nowrap;
+  box-shadow: var(--shadow-float);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 2;
+}
+.chart-tooltip.visible { opacity: 1; transform: translate(-50%, calc(-100% - 14px)) scale(1); }
+.chart-tooltip .tt-weight { color: var(--chart-weight); font-weight: var(--fw-bold); font-size: var(--fs-xs); }
+.chart-tooltip .tt-date { color: var(--chart-time); font-weight: var(--fw-medium); margin-left: 6px; }
 
 .segmented {
   display: flex;
