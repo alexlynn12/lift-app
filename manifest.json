@@ -1,6 +1,6 @@
 {
-  "name": "Lift",
-  "short_name": "Lift",
+  "name": "Just Lift",
+  "short_name": "Just Lift",
   "description": "Personal workout tracker",
   "start_url": "./index.html",
   "scope": "./",

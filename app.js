@@ -1,4 +1,4 @@
-/* Lift — personal workout tracker. Vanilla JS, no build step. */
+/* Just Lift — personal workout tracker. Vanilla JS, no build step. */
 
 (() => {
   "use strict";
@@ -1300,7 +1300,7 @@
             <span class="badge ${notif.cls}">${notif.label}</span>
           </div>
           ${notif.canRequest ? `<button class="btn" style="margin-top:12px;" data-action="enable-notifications">Enable notifications</button>` : ""}
-          <div class="tiny muted" style="margin-top:8px;">On iPhone, you need to add Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
+          <div class="tiny muted" style="margin-top:8px;">On iPhone, you need to add Just Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
         </div>
       </div>
 
@@ -2198,7 +2198,7 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `lift-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `just-lift-backup-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -2215,7 +2215,7 @@
     const looksValid = data && typeof data === "object" &&
       (Array.isArray(data.workouts) || Array.isArray(data.routines) || Array.isArray(data.customExercises) || (data.settings && typeof data.settings === "object"));
     if (!looksValid) {
-      showToast("That file isn't a valid Lift backup.");
+      showToast("That file isn't a valid Just Lift backup.");
       return;
     }
     if (!(await showConfirm("This replaces all current routines, workouts, and custom exercises with the contents of this backup file. This can't be undone.", { title: "Restore backup?", danger: true, okLabel: "Restore" }))) return;
