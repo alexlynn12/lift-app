@@ -16,6 +16,36 @@
 
   const appEl = document.getElementById("app");
   const toastEl = document.getElementById("toast");
+  const confirmOverlayEl = document.getElementById("confirm-overlay");
+  const confirmTitleEl = document.getElementById("confirm-title");
+  const confirmMessageEl = document.getElementById("confirm-message");
+  const confirmCancelBtn = document.getElementById("confirm-cancel");
+  const confirmOkBtn = document.getElementById("confirm-ok");
+  let confirmResolve = null;
+
+  // Styled stand-in for window.confirm() — native browser dialogs look out
+  // of place inside an installed app. Returns a Promise<boolean>.
+  function showConfirm(message, opts = {}) {
+    return new Promise((resolve) => {
+      confirmResolve = resolve;
+      confirmTitleEl.textContent = opts.title || "Are you sure?";
+      confirmMessageEl.textContent = message;
+      confirmOkBtn.textContent = opts.okLabel || "Confirm";
+      confirmCancelBtn.textContent = opts.cancelLabel || "Cancel";
+      confirmOkBtn.classList.toggle("danger", !!opts.danger);
+      confirmOverlayEl.classList.remove("hidden");
+      requestAnimationFrame(() => confirmOverlayEl.classList.add("open"));
+    });
+  }
+
+  function closeConfirm(result) {
+    confirmOverlayEl.classList.remove("open");
+    setTimeout(() => confirmOverlayEl.classList.add("hidden"), 180);
+    if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
+  }
+
+  confirmCancelBtn.addEventListener("click", () => { vibrateTap(); closeConfirm(false); });
+  confirmOkBtn.addEventListener("click", () => { vibrateTap(); closeConfirm(true); });
 
   // iOS Safari only applies :active CSS states to elements when the page
   // has a touch listener somewhere — this no-op listener is the standard
@@ -76,9 +106,9 @@
 
   function showToast(msg) {
     toastEl.textContent = msg;
-    toastEl.classList.remove("hidden");
+    toastEl.classList.add("visible");
     clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => toastEl.classList.add("hidden"), 1800);
+    showToast._t = setTimeout(() => toastEl.classList.remove("visible"), 1800);
   }
 
   function allExercises() {
@@ -272,6 +302,22 @@
     return `${weightToDisplay(s.weight)}×${s.reps}`;
   }
 
+  // Builds a starting set list for an exercise that's just been added to a
+  // workout, pre-filled with the weight/reps from the last time it was
+  // performed so the person doesn't have to retype it. Falls back to blank
+  // sets if there's no history yet. `count`, when given, pins the number of
+  // sets (e.g. a routine's target set count); otherwise it matches however
+  // many sets were completed last time, or defaults to 3.
+  function defaultSetsForExercise(exerciseId, count) {
+    const found = lastCompletedWorkoutFor(exerciseId);
+    const completed = found ? found.exercise.sets.filter((s) => s.completed) : [];
+    const n = count || completed.length || 3;
+    return Array.from({ length: n }, (_, i) => {
+      const prev = completed[i];
+      return prev ? { weight: prev.weight, reps: prev.reps, completed: false } : { weight: "", reps: "", completed: false };
+    });
+  }
+
   function bestWeightFor(exerciseId, excludeWorkoutId) {
     let best = 0;
     for (const w of state.workouts) {
@@ -296,7 +342,7 @@
           exerciseId: re.exerciseId,
           name: exerciseById(re.exerciseId)?.name || "Exercise",
           restSec: re.restSec || state.settings.defaultRestSec,
-          sets: Array.from({ length: re.targetSets || 3 }, () => ({ weight: "", reps: "", completed: false })),
+          sets: defaultSetsForExercise(re.exerciseId, re.targetSets || 3),
         }))
       : [];
     state.activeWorkout = {
@@ -354,6 +400,8 @@
   }
 
   // ---------- Render ----------
+  let lastRenderedHash = null;
+
   function render() {
     const { route, params } = parseHash();
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.route === route));
@@ -373,6 +421,18 @@
     // Keep the rest-timer bar (and the #app top padding that makes room for
     // it) in sync no matter which screen we just rendered.
     renderRestBar();
+
+    // Only animate + scroll-to-top on an actual navigation (the hash
+    // changed) — not on in-place re-renders triggered by things like
+    // toggling a set checkbox, which call render() without touching the
+    // hash and would otherwise flash/jump distractingly on every tap.
+    if (location.hash !== lastRenderedHash) {
+      window.scrollTo(0, 0);
+      appEl.classList.remove("app-enter");
+      void appEl.offsetWidth;
+      appEl.classList.add("app-enter");
+    }
+    lastRenderedHash = location.hash;
   }
 
   function renderHome() {
@@ -397,7 +457,7 @@
         <div class="row" style="margin-bottom:8px;">
           <h3 style="margin:0;">Routines</h3>
         </div>
-        ${state.routines.length === 0 ? `<div class="empty-state"><div class="big">No routines yet</div>Create one to pre-load your sets each session.</div>` : ""}
+        ${state.routines.length === 0 ? emptyStateHtml("No routines yet", "Create one to pre-load your sets each session.", "routines") : ""}
         ${state.routines.map((r) => `
           <div class="card card-tap" data-action="open-routine" data-id="${r.id}">
             <div class="row">
@@ -445,7 +505,7 @@
     const body = document.getElementById("history-body");
     if (tab === "workouts") {
       if (state.workouts.length === 0) {
-        body.innerHTML = `<div class="empty-state"><div class="big">No workouts logged</div>Finish a workout and it'll show up here.</div>`;
+        body.innerHTML = emptyStateHtml("No workouts logged", "Finish a workout and it'll show up here.", "workouts");
         return;
       }
       body.innerHTML = state.workouts.map((w) => `
@@ -467,7 +527,7 @@
       state.workouts.forEach((w) => w.exercises.forEach((e) => ids.add(e.exerciseId)));
       const list = [...ids].map((id) => exerciseById(id)).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
       if (list.length === 0) {
-        body.innerHTML = `<div class="empty-state"><div class="big">No exercise history</div>Log workouts to track progress per exercise.</div>`;
+        body.innerHTML = emptyStateHtml("No exercise history", "Log workouts to track progress per exercise.", "history");
         return;
       }
       body.innerHTML = list.map((ex) => `
@@ -553,7 +613,7 @@
           </div>
         </div>
         <div class="chart-wrap">${renderLineChart(chartPoints)}</div>
-      ` : `<div class="empty-state"><div class="big">No history yet</div>Log this exercise in a workout to see progress.</div>`}
+      ` : emptyStateHtml("No history yet", "Log this exercise in a workout to see progress.", "history")}
 
       ${history.length ? `
         <h3>History</h3>
@@ -790,6 +850,26 @@
     return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  const EMPTY_STATE_ICONS = {
+    routines: `<path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="7" r="1.3" fill="currentColor" stroke="none"/>`,
+    workouts: `<rect x="3" y="9" width="4" height="6" rx="1"/><rect x="17" y="9" width="4" height="6" rx="1"/><line x1="7" y1="12" x2="17" y2="12"/>`,
+    history: `<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>`,
+    search: `<circle cx="10.5" cy="10.5" r="6.5"/><line x1="15.3" y1="15.3" x2="20" y2="20"/>`,
+  };
+
+  function emptyStateHtml(title, message, icon) {
+    const path = EMPTY_STATE_ICONS[icon] || EMPTY_STATE_ICONS.history;
+    return `
+      <div class="empty-state">
+        <div class="empty-state-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${path}</svg>
+        </div>
+        <div class="big">${title}</div>
+        ${message}
+      </div>
+    `;
+  }
+
   // ---------- Event delegation ----------
   appEl.addEventListener("click", onAppClick);
   appEl.addEventListener("input", onAppInput);
@@ -854,7 +934,8 @@
       }
 
       case "discard-workout":
-        if (confirm("Discard this workout? Logged sets will be lost.")) discardWorkout();
+        showConfirm("Logged sets will be lost.", { title: "Discard this workout?", danger: true, okLabel: "Discard" })
+          .then((ok) => { if (ok) discardWorkout(); });
         break;
       case "finish-workout": finishWorkout(); break;
       case "add-workout-exercise": addExerciseToActiveWorkout(); break;
@@ -899,19 +980,31 @@
       const s = state.activeWorkout.exercises[exIdx].sets[setIdx];
       if (action === "set-weight") s.weight = weightFromDisplay(t.value);
       else s.reps = parseInt(t.value, 10) || 0;
+      cascadeSetForward(exIdx, setIdx, s.weight, s.reps);
       saveActiveWorkout();
     }
   }
 
+  // Copies a set's weight/reps forward onto every later set in the same
+  // exercise that hasn't been completed yet — most working sets use the
+  // same weight, so this saves retyping it each time. Sets before the one
+  // being edited, and any set already marked complete, are left alone.
+  function cascadeSetForward(exIdx, fromSetIdx, weight, reps) {
+    const ex = state.activeWorkout.exercises[exIdx];
+    for (let i = fromSetIdx + 1; i < ex.sets.length; i++) {
+      const later = ex.sets[i];
+      if (later.completed) continue;
+      later.weight = weight;
+      later.reps = reps;
+      const wInput = document.querySelector(`[data-action="set-weight"][data-exidx="${exIdx}"][data-setidx="${i}"]`);
+      const rInput = document.querySelector(`[data-action="set-reps"][data-exidx="${exIdx}"][data-setidx="${i}"]`);
+      if (wInput) wInput.value = weight === "" ? "" : weightToDisplay(weight);
+      if (rInput) rInput.value = reps === "" ? "" : reps;
+    }
+  }
+
   function handleNewExercise() {
-    const name = prompt("Exercise name?");
-    if (!name) return;
-    const muscle = prompt("Muscle group? (e.g. Chest, Back, Legs)") || "Other";
-    const equipment = prompt("Equipment? (e.g. Barbell, Dumbbell, Machine, Bodyweight)") || "Other";
-    const ex = { id: "custom-" + uid(), name, muscle, equipment, isCustom: true };
-    state.customExercises.push(ex);
-    DB.put("exercises", ex);
-    render();
+    openNewExerciseModal();
   }
 
   function addExerciseToRoutineDraft() {
@@ -975,33 +1068,45 @@
     renderCreateExerciseForm();
   }
 
-  function renderCreateExerciseForm() {
-    const d = newExerciseDraft;
-    const valid = d.name.trim().length > 0 && !!d.muscle && !!d.equipment;
-    const body = document.getElementById("picker-create-body");
-    body.innerHTML = `
+  // Shared markup for "name a new exercise, pick a muscle group, pick a
+  // workout type" — used by both the in-workout picker's create flow and
+  // the standalone New Exercise modal opened from the Exercises tab.
+  function exerciseFormFieldsHtml(draft, opts) {
+    const valid = draft.name.trim().length > 0 && !!draft.muscle && !!draft.equipment;
+    return `
       <div class="create-ex-form">
-        <label class="create-ex-label" for="create-ex-name">Exercise name</label>
-        <input type="text" id="create-ex-name" class="create-ex-name-input" placeholder="e.g. Landmine press" value="${escapeHtml(d.name)}" />
+        <label class="create-ex-label" for="${opts.nameInputId}">Exercise name</label>
+        <input type="text" id="${opts.nameInputId}" class="create-ex-name-input" placeholder="e.g. Landmine press" value="${escapeHtml(draft.name)}" />
 
         <label class="create-ex-label">Muscle group</label>
         <div class="create-ex-chips">
-          ${MUSCLE_GROUPS.map((m) => `<button class="chip ${d.muscle === m ? "chip-selected" : ""}" data-action="create-ex-set-muscle" data-value="${m}">${m}</button>`).join("")}
+          ${MUSCLE_GROUPS.map((m) => `<button class="chip ${draft.muscle === m ? "chip-selected" : ""}" data-action="${opts.muscleAction}" data-value="${m}">${m}</button>`).join("")}
         </div>
 
         <label class="create-ex-label">Workout type</label>
         <div class="create-ex-equip-grid">
           ${EQUIPMENT_TYPES.map((eq) => `
-            <button class="equip-choice ${d.equipment === eq ? "equip-choice-selected" : ""}" data-action="create-ex-set-equipment" data-value="${eq}">
+            <button class="equip-choice ${draft.equipment === eq ? "equip-choice-selected" : ""}" data-action="${opts.equipAction}" data-value="${eq}">
               <span class="equip-choice-icon">${equipmentIcon(eq)}</span>
               <span class="equip-choice-label">${eq}</span>
             </button>
           `).join("")}
         </div>
 
-        <button class="btn btn-primary create-ex-save" data-action="create-ex-save" ${valid ? "" : "disabled"}>Add exercise</button>
+        <button class="btn btn-primary create-ex-save" data-action="${opts.saveAction}" ${valid ? "" : "disabled"}>${opts.saveLabel}</button>
       </div>
     `;
+  }
+
+  function renderCreateExerciseForm() {
+    const body = document.getElementById("picker-create-body");
+    body.innerHTML = exerciseFormFieldsHtml(newExerciseDraft, {
+      nameInputId: "create-ex-name",
+      muscleAction: "create-ex-set-muscle",
+      equipAction: "create-ex-set-equipment",
+      saveAction: "create-ex-save",
+      saveLabel: "Add exercise",
+    });
     const nameInput = document.getElementById("create-ex-name");
     nameInput.addEventListener("input", () => {
       newExerciseDraft.name = nameInput.value;
@@ -1022,6 +1127,71 @@
     confirmPickerSelection(ex.id);
     showToast(`${name} added`);
   }
+
+  // ---------- Standalone "New exercise" modal (Exercises tab entry point) ----------
+  let libraryExerciseDraft = null;
+
+  function openNewExerciseModal() {
+    libraryExerciseDraft = { name: "", muscle: null, equipment: null };
+    const overlay = document.getElementById("new-exercise-modal");
+    overlay.classList.remove("hidden");
+    renderNewExerciseForm();
+    requestAnimationFrame(() => overlay.classList.add("open"));
+  }
+
+  function closeNewExerciseModal() {
+    const overlay = document.getElementById("new-exercise-modal");
+    overlay.classList.remove("open");
+    setTimeout(() => overlay.classList.add("hidden"), 220);
+    libraryExerciseDraft = null;
+  }
+
+  function renderNewExerciseForm() {
+    const body = document.getElementById("new-exercise-body");
+    body.innerHTML = exerciseFormFieldsHtml(libraryExerciseDraft, {
+      nameInputId: "new-ex-name",
+      muscleAction: "new-ex-set-muscle",
+      equipAction: "new-ex-set-equipment",
+      saveAction: "new-ex-save",
+      saveLabel: "Save exercise",
+    });
+    const nameInput = document.getElementById("new-ex-name");
+    nameInput.addEventListener("input", () => {
+      libraryExerciseDraft.name = nameInput.value;
+      const saveBtn = body.querySelector(".create-ex-save");
+      const isValid = libraryExerciseDraft.name.trim().length > 0 && !!libraryExerciseDraft.muscle && !!libraryExerciseDraft.equipment;
+      saveBtn.disabled = !isValid;
+    });
+  }
+
+  function saveLibraryExercise() {
+    const d = libraryExerciseDraft;
+    if (!d) return;
+    const name = d.name.trim();
+    if (!name || !d.muscle || !d.equipment) return;
+    const ex = { id: "custom-" + uid(), name, muscle: d.muscle, equipment: d.equipment, isCustom: true };
+    state.customExercises.push(ex);
+    DB.put("exercises", ex);
+    closeNewExerciseModal();
+    showToast(`${name} added to your exercises`);
+    navigate("exercise-detail", { id: ex.id });
+  }
+
+  document.getElementById("new-exercise-cancel").addEventListener("click", () => { vibrateTap(); closeNewExerciseModal(); });
+  document.getElementById("new-exercise-body").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-action]");
+    if (!t) return;
+    vibrateTap();
+    if (t.dataset.action === "new-ex-set-muscle") {
+      libraryExerciseDraft.muscle = t.dataset.value;
+      renderNewExerciseForm();
+    } else if (t.dataset.action === "new-ex-set-equipment") {
+      libraryExerciseDraft.equipment = t.dataset.value;
+      renderNewExerciseForm();
+    } else if (t.dataset.action === "new-ex-save") {
+      saveLibraryExercise();
+    }
+  });
 
   function populatePickerFilters() {
     const muscles = [...new Set(allExercises().map((e) => e.muscle))].sort();
@@ -1099,7 +1269,7 @@
         <div class="picker-letter-heading" id="picker-letter-${L}">${L}</div>
         ${groups[L].map((e) => pickerRowHtml(e)).join("")}
       `).join("")
-      : `<div class="empty-state"><div class="big">No matches</div>Try a different search or filter.</div>`;
+      : emptyStateHtml("No matches", "Try a different search or filter.", "search");
 
     const idxEl = document.getElementById("picker-index");
     idxEl.innerHTML = ALPHABET.map((L) =>
@@ -1119,7 +1289,7 @@
         exerciseId: ex.id,
         name: ex.name,
         restSec: state.settings.defaultRestSec,
-        sets: [{ weight: "", reps: "", completed: false }, { weight: "", reps: "", completed: false }, { weight: "", reps: "", completed: false }],
+        sets: defaultSetsForExercise(ex.id),
       });
       saveActiveWorkout();
       closeExercisePicker();
@@ -1182,14 +1352,14 @@
   }
 
   async function deleteRoutine(id) {
-    if (!confirm("Delete this routine?")) return;
+    if (!(await showConfirm("This can't be undone.", { title: "Delete this routine?", danger: true, okLabel: "Delete" }))) return;
     await DB.delete("routines", id);
     state.routines = state.routines.filter((r) => r.id !== id);
     navigate("home");
   }
 
   async function deleteWorkout(id) {
-    if (!confirm("Delete this workout? This can't be undone.")) return;
+    if (!(await showConfirm("This can't be undone.", { title: "Delete this workout?", danger: true, okLabel: "Delete" }))) return;
     await DB.delete("workouts", id);
     state.workouts = state.workouts.filter((w) => w.id !== id);
     showToast("Workout deleted");
@@ -1213,7 +1383,7 @@
   }
 
   async function resetData() {
-    if (!confirm("This deletes all routines, workouts, and custom exercises. Continue?")) return;
+    if (!(await showConfirm("This deletes all routines, workouts, and custom exercises.", { title: "Erase all data?", danger: true, okLabel: "Erase" }))) return;
     await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts")]);
     await DB.kvSet("activeWorkout", null);
     state.customExercises = [];
