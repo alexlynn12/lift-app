@@ -1322,7 +1322,10 @@
         <h3>Data</h3>
         <div class="card">
           <button class="btn" data-action="export-data" style="margin-bottom:8px;">Export backup</button>
+          <button class="btn" data-action="import-data" style="margin-bottom:8px;">Restore from backup</button>
+          <input type="file" id="import-file-input" data-action="import-file" accept="application/json,.json" style="display:none;" />
           <button class="btn btn-danger" data-action="reset-data">Erase all data</button>
+          <div class="tiny muted" style="margin-top:8px;">Your workouts live only on this device's browser storage — they're never uploaded anywhere, including the app's GitHub repo. Export a backup periodically (or before switching phones/browsers) so you always have a copy you control.</div>
         </div>
       </div>
     `;
@@ -1633,6 +1636,7 @@
   // ---------- Event delegation ----------
   appEl.addEventListener("click", onAppClick);
   appEl.addEventListener("input", onAppInput);
+  appEl.addEventListener("change", onAppChange);
 
   function onAppClick(e) {
     const t = e.target.closest("[data-action]");
@@ -1678,6 +1682,7 @@
         break;
       case "enable-notifications": requestNotificationPermission(); break;
       case "export-data": exportData(); break;
+      case "import-data": document.getElementById("import-file-input").click(); break;
       case "reset-data": resetData(); break;
 
       case "save-routine": saveRoutineDraft(); break;
@@ -1778,6 +1783,16 @@
     } else if (action === "set-height") {
       state.settings.heightIn = t.value === "" ? null : heightFromDisplay(t.value);
       saveSettings();
+    }
+  }
+
+  function onAppChange(e) {
+    const t = e.target.closest("[data-action]");
+    if (!t) return;
+    if (t.dataset.action === "import-file" && t.files && t.files[0]) {
+      const file = t.files[0];
+      t.value = ""; // reset so re-selecting the same file still fires change
+      importData(file);
     }
   }
 
@@ -2188,6 +2203,50 @@
     URL.revokeObjectURL(url);
   }
 
+  async function importData(file) {
+    let data;
+    try {
+      const text = await file.text();
+      data = JSON.parse(text);
+    } catch (err) {
+      showToast("That file isn't a valid backup.");
+      return;
+    }
+    const looksValid = data && typeof data === "object" &&
+      (Array.isArray(data.workouts) || Array.isArray(data.routines) || Array.isArray(data.customExercises) || (data.settings && typeof data.settings === "object"));
+    if (!looksValid) {
+      showToast("That file isn't a valid Lift backup.");
+      return;
+    }
+    if (!(await showConfirm("This replaces all current routines, workouts, and custom exercises with the contents of this backup file. This can't be undone.", { title: "Restore backup?", danger: true, okLabel: "Restore" }))) return;
+
+    await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts")]);
+
+    const customExercises = Array.isArray(data.customExercises) ? data.customExercises : [];
+    const routines = Array.isArray(data.routines) ? data.routines : [];
+    const workouts = Array.isArray(data.workouts) ? data.workouts : [];
+
+    await Promise.all([
+      ...customExercises.map((ex) => DB.put("exercises", ex)),
+      ...routines.map((r) => DB.put("routines", r)),
+      ...workouts.map((w) => DB.put("workouts", w)),
+    ]);
+
+    if (data.settings && typeof data.settings === "object") {
+      state.settings = { ...state.settings, ...data.settings };
+      saveSettings();
+    }
+
+    state.customExercises = customExercises;
+    state.routines = routines;
+    state.workouts = workouts.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    await backfillEffortScores();
+
+    showToast("Backup restored.");
+    navigate("home");
+  }
+
   async function resetData() {
     if (!(await showConfirm("This deletes all routines, workouts, and custom exercises.", { title: "Erase all data?", danger: true, okLabel: "Erase" }))) return;
     await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts")]);
@@ -2211,6 +2270,11 @@
     render();
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("sw.js").catch(() => {});
+    }
+    // Ask the browser not to auto-evict this site's storage under disk
+    // pressure. Best-effort only — unsupported or denied silently no-ops.
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().catch(() => {});
     }
   })();
 })();
