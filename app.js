@@ -307,14 +307,19 @@
   // performed so the person doesn't have to retype it. Falls back to blank
   // sets if there's no history yet. `count`, when given, pins the number of
   // sets (e.g. a routine's target set count); otherwise it matches however
-  // many sets were completed last time, or defaults to 3.
-  function defaultSetsForExercise(exerciseId, count) {
+  // many sets were completed last time, or defaults to 3. `targetWeight`,
+  // when given (e.g. a routine's planned weight), overrides the prefilled
+  // weight for every set.
+  function defaultSetsForExercise(exerciseId, count, targetWeight) {
     const found = lastCompletedWorkoutFor(exerciseId);
     const completed = found ? found.exercise.sets.filter((s) => s.completed) : [];
     const n = count || completed.length || 3;
+    const hasTarget = targetWeight !== undefined && targetWeight !== null && targetWeight !== "";
     return Array.from({ length: n }, (_, i) => {
       const prev = completed[i];
-      return prev ? { weight: prev.weight, reps: prev.reps, completed: false } : { weight: "", reps: "", completed: false };
+      const weight = hasTarget ? targetWeight : (prev ? prev.weight : "");
+      const reps = prev ? prev.reps : "";
+      return { weight, reps, completed: false };
     });
   }
 
@@ -342,7 +347,7 @@
           exerciseId: re.exerciseId,
           name: exerciseById(re.exerciseId)?.name || "Exercise",
           restSec: re.restSec || state.settings.defaultRestSec,
-          sets: defaultSetsForExercise(re.exerciseId, re.targetSets || 3),
+          sets: defaultSetsForExercise(re.exerciseId, re.targetSets || 3, re.targetWeight),
         }))
       : [];
     state.activeWorkout = {
@@ -759,6 +764,13 @@
                 <button class="icon-btn" data-action="routine-sets-adjust" data-index="${i}" data-delta="1">+</button>
               </div>
             </div>
+            <div class="row" style="margin-top:8px;">
+              <span class="small muted">Weight</span>
+              <div class="row-gap">
+                <input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="routine-weight" data-index="${i}" value="${re.targetWeight === "" || re.targetWeight == null ? "" : weightToDisplay(re.targetWeight)}" placeholder="0" style="width:70px;" />
+                <span class="small muted">${unitLabel()}</span>
+              </div>
+            </div>
           </div>`;
         }).join("")}
       </div>
@@ -982,6 +994,9 @@
       else s.reps = parseInt(t.value, 10) || 0;
       cascadeSetForward(exIdx, setIdx, s.weight, s.reps);
       saveActiveWorkout();
+    } else if (action === "routine-weight") {
+      const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
+      re.targetWeight = t.value === "" ? "" : weightFromDisplay(t.value);
     }
   }
 
@@ -1281,7 +1296,7 @@
     const ex = exerciseById(exerciseId);
     if (!ex) return;
     if (pickerContext === "routine") {
-      renderRoutineEdit._draft.exercises.push({ exerciseId: ex.id, targetSets: 3, restSec: state.settings.defaultRestSec });
+      renderRoutineEdit._draft.exercises.push({ exerciseId: ex.id, targetSets: 3, targetWeight: "", restSec: state.settings.defaultRestSec });
       closeExercisePicker();
       render();
     } else if (pickerContext === "workout") {
