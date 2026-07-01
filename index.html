@@ -53,20 +53,24 @@
   <div class="picker-handle"></div>
   <div class="picker-topbar">
     <button class="back-btn" id="picker-close">Cancel</button>
-    <span class="picker-title">Add exercise</span>
+    <span class="picker-title" id="picker-title">Add exercise</span>
     <span style="width:46px;"></span>
   </div>
-  <div class="picker-search-row">
+  <div class="picker-search-row" id="picker-search-row">
     <input type="text" id="picker-search" placeholder="Search exercises" />
   </div>
-  <div class="picker-filter-row">
+  <div class="picker-filter-row" id="picker-filter-row">
     <select id="picker-filter-muscle"></select>
     <select id="picker-filter-equipment"></select>
   </div>
-  <div class="picker-body">
+  <div class="picker-create-row" id="picker-create-row">
+    <button class="picker-create-btn" data-action="open-create-exercise">+ Can&rsquo;t find it? Create a new exercise</button>
+  </div>
+  <div class="picker-body" id="picker-body">
     <div class="picker-list" id="picker-list"></div>
     <div class="picker-index" id="picker-index"></div>
   </div>
+  <div class="picker-create-body hidden" id="picker-create-body"></div>
 </div>
 
 <script src="db.js"></script>

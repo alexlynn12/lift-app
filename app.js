@@ -924,13 +924,18 @@
 
   // ---------- Exercise picker ----------
   const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
+  const MUSCLE_GROUPS = ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs", "Core", "Other"];
+  const EQUIPMENT_TYPES = ["Barbell", "Dumbbell", "Cable", "Machine", "Bodyweight", "Other"];
   let pickerContext = null; // "routine" | "workout"
+  let pickerViewMode = "list"; // "list" | "create"
+  let newExerciseDraft = null;
 
   function openExercisePicker(context) {
     pickerContext = context;
     const overlay = document.getElementById("exercise-picker");
     overlay.classList.remove("hidden");
     document.getElementById("picker-search").value = "";
+    showPickerListView();
     populatePickerFilters();
     renderPickerList();
     requestAnimationFrame(() => overlay.classList.add("open"));
@@ -941,6 +946,81 @@
     overlay.classList.remove("open");
     setTimeout(() => overlay.classList.add("hidden"), 220);
     pickerContext = null;
+    pickerViewMode = "list";
+    newExerciseDraft = null;
+  }
+
+  function showPickerListView() {
+    pickerViewMode = "list";
+    newExerciseDraft = null;
+    document.getElementById("picker-search-row").classList.remove("hidden");
+    document.getElementById("picker-filter-row").classList.remove("hidden");
+    document.getElementById("picker-create-row").classList.remove("hidden");
+    document.getElementById("picker-body").classList.remove("hidden");
+    document.getElementById("picker-create-body").classList.add("hidden");
+    document.getElementById("picker-title").textContent = "Add exercise";
+    document.getElementById("picker-close").textContent = "Cancel";
+  }
+
+  function openCreateExercise() {
+    pickerViewMode = "create";
+    newExerciseDraft = { name: "", muscle: null, equipment: null };
+    document.getElementById("picker-search-row").classList.add("hidden");
+    document.getElementById("picker-filter-row").classList.add("hidden");
+    document.getElementById("picker-create-row").classList.add("hidden");
+    document.getElementById("picker-body").classList.add("hidden");
+    document.getElementById("picker-create-body").classList.remove("hidden");
+    document.getElementById("picker-title").textContent = "New exercise";
+    document.getElementById("picker-close").textContent = "‹ Back";
+    renderCreateExerciseForm();
+  }
+
+  function renderCreateExerciseForm() {
+    const d = newExerciseDraft;
+    const valid = d.name.trim().length > 0 && !!d.muscle && !!d.equipment;
+    const body = document.getElementById("picker-create-body");
+    body.innerHTML = `
+      <div class="create-ex-form">
+        <label class="create-ex-label" for="create-ex-name">Exercise name</label>
+        <input type="text" id="create-ex-name" class="create-ex-name-input" placeholder="e.g. Landmine press" value="${escapeHtml(d.name)}" />
+
+        <label class="create-ex-label">Muscle group</label>
+        <div class="create-ex-chips">
+          ${MUSCLE_GROUPS.map((m) => `<button class="chip ${d.muscle === m ? "chip-selected" : ""}" data-action="create-ex-set-muscle" data-value="${m}">${m}</button>`).join("")}
+        </div>
+
+        <label class="create-ex-label">Workout type</label>
+        <div class="create-ex-equip-grid">
+          ${EQUIPMENT_TYPES.map((eq) => `
+            <button class="equip-choice ${d.equipment === eq ? "equip-choice-selected" : ""}" data-action="create-ex-set-equipment" data-value="${eq}">
+              <span class="equip-choice-icon">${equipmentIcon(eq)}</span>
+              <span class="equip-choice-label">${eq}</span>
+            </button>
+          `).join("")}
+        </div>
+
+        <button class="btn btn-primary create-ex-save" data-action="create-ex-save" ${valid ? "" : "disabled"}>Add exercise</button>
+      </div>
+    `;
+    const nameInput = document.getElementById("create-ex-name");
+    nameInput.addEventListener("input", () => {
+      newExerciseDraft.name = nameInput.value;
+      const saveBtn = body.querySelector(".create-ex-save");
+      const isValid = newExerciseDraft.name.trim().length > 0 && !!newExerciseDraft.muscle && !!newExerciseDraft.equipment;
+      saveBtn.disabled = !isValid;
+    });
+  }
+
+  function saveNewExercise() {
+    const d = newExerciseDraft;
+    if (!d) return;
+    const name = d.name.trim();
+    if (!name || !d.muscle || !d.equipment) return;
+    const ex = { id: "custom-" + uid(), name, muscle: d.muscle, equipment: d.equipment, isCustom: true };
+    state.customExercises.push(ex);
+    DB.put("exercises", ex);
+    confirmPickerSelection(ex.id);
+    showToast(`${name} added`);
   }
 
   function populatePickerFilters() {
@@ -1049,7 +1129,11 @@
     }
   }
 
-  document.getElementById("picker-close").addEventListener("click", () => { vibrateTap(); closeExercisePicker(); });
+  document.getElementById("picker-close").addEventListener("click", () => {
+    vibrateTap();
+    if (pickerViewMode === "create") showPickerListView();
+    else closeExercisePicker();
+  });
   document.getElementById("picker-search").addEventListener("input", renderPickerList);
   document.getElementById("picker-filter-muscle").addEventListener("change", renderPickerList);
   document.getElementById("picker-filter-equipment").addEventListener("change", renderPickerList);
@@ -1064,6 +1148,27 @@
     if (!btn || btn.disabled) return;
     const target = document.getElementById("picker-letter-" + btn.dataset.letter);
     if (target) target.scrollIntoView({ block: "start" });
+  });
+  document.getElementById("picker-create-row").addEventListener("click", (e) => {
+    const btn = e.target.closest('[data-action="open-create-exercise"]');
+    if (!btn) return;
+    vibrateTap();
+    openCreateExercise();
+  });
+  document.getElementById("picker-create-body").addEventListener("click", (e) => {
+    const t = e.target.closest("[data-action]");
+    if (!t) return;
+    vibrateTap();
+    const action = t.dataset.action;
+    if (action === "create-ex-set-muscle") {
+      newExerciseDraft.muscle = t.dataset.value;
+      renderCreateExerciseForm();
+    } else if (action === "create-ex-set-equipment") {
+      newExerciseDraft.equipment = t.dataset.value;
+      renderCreateExerciseForm();
+    } else if (action === "create-ex-save") {
+      saveNewExercise();
+    }
   });
 
   async function saveRoutineDraft() {
