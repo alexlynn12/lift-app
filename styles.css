@@ -247,6 +247,15 @@ input:focus, select:focus, textarea:focus {
   padding: 4px 0;
 }
 
+/* Live elapsed-time readout shown in the workout-active topbar */
+.workout-clock {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  letter-spacing: 0.2px;
+}
+
 /* Tab bar */
 .tabbar {
   position: fixed;

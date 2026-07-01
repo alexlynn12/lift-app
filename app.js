@@ -58,9 +58,27 @@
   const menuNoteSaveBtn = document.getElementById("menu-note-save");
   const exerciseMenuCloseBtn = document.getElementById("exercise-menu-close");
   let exerciseMenuIndex = null;
+  let exerciseMenuContext = "routine"; // "routine" (editing a draft) | "workout" (an in-progress workout)
 
-  function openExerciseMenu(index) {
+  // Resolves the exercise object the open menu applies to, plus how to
+  // persist a change to it — a routine draft only needs to be saved when
+  // the person taps the screen's own Save button, while an in-progress
+  // workout should persist immediately so nothing is lost if the app closes.
+  function getExerciseMenuTarget() {
+    if (exerciseMenuIndex == null) return null;
+    if (exerciseMenuContext === "workout") {
+      const w = state.activeWorkout;
+      const ex = w && w.exercises[exerciseMenuIndex];
+      return ex ? { ex, persist: () => saveActiveWorkout() } : null;
+    }
+    const draft = renderRoutineEdit._draft;
+    const re = draft && draft.exercises[exerciseMenuIndex];
+    return re ? { ex: re, persist: () => {} } : null;
+  }
+
+  function openExerciseMenu(index, context = "routine") {
     exerciseMenuIndex = index;
+    exerciseMenuContext = context;
     exerciseMenuActionsEl.classList.remove("hidden");
     menuNoteFormEl.classList.add("hidden");
     exerciseMenuOverlayEl.classList.remove("hidden");
@@ -77,18 +95,22 @@
 
   exerciseMenuActionsEl.addEventListener("click", (e) => {
     const t = e.target.closest("[data-action]");
-    if (!t || exerciseMenuIndex == null) return;
+    if (!t) return;
     vibrateTap();
-    const draft = renderRoutineEdit._draft;
-    const re = draft && draft.exercises[exerciseMenuIndex];
-    if (!re) { closeExerciseMenu(); return; }
+    const target = getExerciseMenuTarget();
+    if (!target) { closeExerciseMenu(); return; }
+    const { ex, persist } = target;
     if (t.dataset.action === "menu-add-note") {
-      menuNoteInputEl.value = re.note || "";
+      menuNoteInputEl.value = ex.note || "";
       exerciseMenuActionsEl.classList.add("hidden");
       menuNoteFormEl.classList.remove("hidden");
       menuNoteInputEl.focus();
     } else if (t.dataset.action === "menu-add-warmup") {
-      re.sets.unshift({ weight: "", reps: "", isWarmup: true });
+      const warmupSet = exerciseMenuContext === "workout"
+        ? { weight: "", reps: "", completed: false, isWarmup: true }
+        : { weight: "", reps: "", isWarmup: true };
+      ex.sets.unshift(warmupSet);
+      persist();
       closeExerciseMenu();
       render();
     }
@@ -96,9 +118,11 @@
 
   menuNoteSaveBtn.addEventListener("click", () => {
     vibrateTap();
-    const draft = renderRoutineEdit._draft;
-    const re = draft && exerciseMenuIndex != null && draft.exercises[exerciseMenuIndex];
-    if (re) re.note = menuNoteInputEl.value.trim();
+    const target = getExerciseMenuTarget();
+    if (target) {
+      target.ex.note = menuNoteInputEl.value.trim();
+      target.persist();
+    }
     closeExerciseMenu();
     render();
   });
@@ -470,6 +494,7 @@
     await DB.put("workouts", record);
     state.workouts.unshift(record);
     state.activeWorkout = null;
+    stopWorkoutClock();
     await DB.kvSet("activeWorkout", null);
     showToast(prCount > 0 ? `Workout saved · ${prCount} PR${prCount > 1 ? "s" : ""}` : "Workout saved");
     navigate("home");
@@ -477,6 +502,7 @@
 
   function discardWorkout() {
     state.activeWorkout = null;
+    stopWorkoutClock();
     DB.kvSet("activeWorkout", null);
     navigate("home");
   }
@@ -898,10 +924,10 @@
     appEl.innerHTML = `
       <div class="topbar">
         <button class="back-btn" data-action="discard-workout">Discard</button>
+        <span class="workout-clock" id="workout-elapsed">${fmtTime((Date.now() - new Date(w.startedAt).getTime()) / 1000)}</span>
         <button class="btn btn-sm btn-primary" data-action="finish-workout">Finish</button>
       </div>
-      <input type="text" id="workout-name" value="${escapeHtml(w.name)}" style="font-size:20px; font-weight:600; border:none; background:transparent; padding:4px 0; margin-bottom:4px;" />
-      <div class="tiny muted" style="margin-bottom:16px;">Started ${new Date(w.startedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</div>
+      <input type="text" id="workout-name" value="${escapeHtml(w.name)}" style="font-size:20px; font-weight:600; border:none; background:transparent; padding:4px 0; margin-bottom:16px;" />
 
       <div id="workout-exercises">
         ${w.exercises.map((ex, exIdx) => renderExerciseBlock(ex, exIdx)).join("")}
@@ -914,6 +940,32 @@
       saveActiveWorkout();
     });
     renderRestBar();
+    startWorkoutClock();
+  }
+
+  // ---------- Live workout duration clock ----------
+  // Ticks the elapsed-time readout in the workout-active topbar once a
+  // second. Re-queries the element by id on every tick rather than holding
+  // a reference, since render() rebuilds #app's innerHTML on every
+  // navigation/edit and would otherwise leave the interval pointing at a
+  // detached node. Elapsed time is always derived from the real
+  // `startedAt` timestamp (not accumulated tick-by-tick), so it stays
+  // correct even if the app was closed and reopened mid-workout.
+  let workoutClockInterval = null;
+
+  function startWorkoutClock() {
+    if (workoutClockInterval) return;
+    workoutClockInterval = setInterval(() => {
+      const w = state.activeWorkout;
+      if (!w) { stopWorkoutClock(); return; }
+      const el = document.getElementById("workout-elapsed");
+      if (!el) return; // navigated away from workout-active; keep ticking quietly
+      el.textContent = fmtTime((Date.now() - new Date(w.startedAt).getTime()) / 1000);
+    }, 1000);
+  }
+
+  function stopWorkoutClock() {
+    if (workoutClockInterval) { clearInterval(workoutClockInterval); workoutClockInterval = null; }
   }
 
   function renderExerciseBlock(ex, exIdx) {
@@ -927,11 +979,12 @@
             ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
           </div>
           <div class="ex-header-actions">
+            <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">⋯</button>
             <button class="icon-btn" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
         </div>
         <table class="set-table">
-          <tr><th>Set</th><th>Previous</th><th>${u}</th><th>Reps</th><th></th></tr>
+          <tr><th>Set</th><th>Previous</th><th>${u}</th><th>Reps</th><th></th><th></th></tr>
           ${ex.sets.map((s, setIdx) => {
             const isWarmup = !!s.isWarmup;
             const label = isWarmup ? "W" : (++workingNum);
@@ -943,8 +996,9 @@
               <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
               <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">✓</button></td>
+              <td><button class="set-remove-btn" data-action="remove-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Remove set">×</button></td>
             </tr>
-            <tr class="rest-divider-row"><td colspan="5">
+            <tr class="rest-divider-row"><td colspan="6">
               <div class="rest-divider">
                 <button class="rest-divider-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="-15" aria-label="Decrease rest 15 seconds">−15</button>
                 <span class="rest-divider-time">${fmtTime(ex.restSec)}</span>
@@ -1062,7 +1116,7 @@
         render();
         break;
       case "routine-ex-menu":
-        openExerciseMenu(parseInt(t.dataset.index, 10));
+        openExerciseMenu(parseInt(t.dataset.index, 10), "routine");
         break;
       case "routine-rest-adjust": {
         const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
@@ -1099,6 +1153,15 @@
         saveActiveWorkout(); render();
         break;
       }
+      case "remove-set": {
+        const ex = state.activeWorkout.exercises[parseInt(t.dataset.exidx, 10)];
+        ex.sets.splice(parseInt(t.dataset.setidx, 10), 1);
+        saveActiveWorkout(); render();
+        break;
+      }
+      case "workout-ex-menu":
+        openExerciseMenu(parseInt(t.dataset.exidx, 10), "workout");
+        break;
       case "ex-rest-adjust": {
         const ex = state.activeWorkout.exercises[parseInt(t.dataset.exidx, 10)];
         ex.restSec = Math.max(0, ex.restSec + parseInt(t.dataset.delta, 10));
