@@ -1010,6 +1010,15 @@ input:focus, select:focus, textarea:focus {
   margin-bottom: 12px;
 }
 .complete-stats .stat-card { margin-bottom: 0; }
+/* Three-axis effort breakdown (intensity / muscle / work) */
+.effort-breakdown { width: 100%; max-width: 300px; display: flex; flex-direction: column; gap: 10px; margin: 4px 0 6px; }
+.effort-axis-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
+.effort-axis-label { font-size: var(--fs-xs); font-weight: var(--fw-bold); }
+.effort-axis-sub { font-size: var(--fs-2xs); font-weight: var(--fw-medium); color: var(--text-3); margin-left: 2px; }
+.effort-axis-value { font-size: var(--fs-xs); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; color: var(--text-2); }
+.effort-axis-track { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.effort-axis-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--chart-weight), var(--chart-time)); }
+
 .complete-pr-banner {
   width: 100%;
   background: var(--accent-bg);
