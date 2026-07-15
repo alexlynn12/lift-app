@@ -1,4 +1,4 @@
-const CACHE = "lift-v1";
+const CACHE = "lift-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -6,6 +6,7 @@ const ASSETS = [
   "./app.js",
   "./db.js",
   "./exercises-data.js",
+  "./program-seed.js",
   "./manifest.json",
 ];
 
@@ -26,7 +27,7 @@ self.addEventListener("activate", (e) => {
 // Network-first for the app shell (HTML/CSS/JS) so updates show up immediately
 // whenever the device is online. Falls back to the cached copy when offline.
 // Other same-origin GETs (icons, manifest) stay cache-first since they rarely change.
-const SHELL_NAMES = ["index.html", "styles.css", "app.js", "db.js", "exercises-data.js"];
+const SHELL_NAMES = ["index.html", "styles.css", "app.js", "db.js", "exercises-data.js", "program-seed.js"];
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;
@@ -66,20 +67,6 @@ self.addEventListener("fetch", (e) => {
         })
         .catch(() => cached);
       return cached || fetchPromise;
-    })
-  );
-});
-
-// Tapping a rest-timer notification focuses the app if it's already open,
-// or opens a new window/tab otherwise.
-self.addEventListener("notificationclick", (event) => {
-  event.notification.close();
-  event.waitUntil(
-    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if ("focus" in client) return client.focus();
-      }
-      if (clients.openWindow) return clients.openWindow("./");
     })
   );
 });

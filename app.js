@@ -5,24 +5,13 @@
 
   // ---------- Global state ----------
   const state = {
-    settings: { unitMode: "both", activeUnit: "lb", defaultRestSec: 90, hapticsEnabled: true, bodyWeightLb: null, heightIn: null },
+    settings: { unitMode: "both", activeUnit: "lb", hapticsEnabled: true, bodyWeightLb: null, heightIn: null },
     customExercises: [],
     routines: [],
     workouts: [],
-    activeWorkout: null, // { id, name, startedAt, exercises: [{exerciseId, name, restSec, sets:[{weight,reps,completed,isWarmup}]}] }
-    pushSubscribed: false,
+    activeWorkout: null, // { id, name, startedAt, exercises: [{exerciseId, name, sets:[{weight,reps,completed,isWarmup}]}] }
   };
 
-  let restTimer = { endTime: null, raf: null, timeoutId: null, exerciseName: "", id: null };
-
-  // Public VAPID key for the rest-timer push backend (see push-worker/ in
-  // this repo). Safe to embed — it's the public half of the key pair, not
-  // the secret used to sign messages. PUSH_API_BASE is filled in once the
-  // Cloudflare Worker is deployed; until then, scheduling/cancelling a
-  // server push is a no-op and the app falls back to the in-app beep/
-  // vibration/banner only (no lock-screen alert).
-  const VAPID_PUBLIC_KEY = "BPeyEp760rhvieDGW6iFs-jBrm3l2m2Zi6dErniXYYcgh8ZKk1p37O0jfPUW88vGtGp3JWlj8zIQh5bDGwqsipc";
-  const PUSH_API_BASE = "";
 
   const appEl = document.getElementById("app");
   const toastEl = document.getElementById("toast");
@@ -231,13 +220,12 @@
 
   // ---------- Persistence ----------
   async function loadAll() {
-    const [settings, customExercises, routines, workouts, activeWorkout, pushSubscription] = await Promise.all([
+    const [settings, customExercises, routines, workouts, activeWorkout] = await Promise.all([
       DB.kvGet("settings", null),
       DB.getAll("exercises"),
       DB.getAll("routines"),
       DB.getAll("workouts"),
       DB.kvGet("activeWorkout", null),
-      DB.kvGet("pushSubscription", null),
     ]);
     // Merge (not replace) so new setting fields added after someone's first
     // install — like bodyWeightLb — still get their default instead of
@@ -245,26 +233,66 @@
     if (settings) state.settings = { ...state.settings, ...settings };
     state.customExercises = customExercises || [];
     state.routines = routines || [];
+    await seedProgram();
     state.workouts = (workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     state.activeWorkout = activeWorkout;
-    state.pushSubscribed = !!pushSubscription;
 
     await backfillEffortScores();
 
-    const savedTimer = await DB.kvGet("restTimer", null);
-    if (savedTimer && savedTimer.endTime > Date.now()) {
-      restTimer.endTime = savedTimer.endTime;
-      restTimer.exerciseName = savedTimer.exerciseName;
-      restTimer.id = savedTimer.id || null;
-      startTimerLoop();
+  }
+
+  // Seeds (or upgrades) the pre-loaded training program. A fresh install gets
+  // the routines from program-seed.js. When PROGRAM_SEED_VERSION is bumped —
+  // meaning the program itself changed (e.g. v3 -> v3.1) — existing installs
+  // get their old seed-* routines swapped for the new ones. User-created
+  // routines and all workout history/PRs are never touched. An install that
+  // deliberately deleted the seeded program doesn't get it re-added.
+  async function seedProgram() {
+    if (typeof PROGRAM_SEED === "undefined" || !PROGRAM_SEED.length) return;
+    const version = typeof PROGRAM_SEED_VERSION === "undefined" ? 1 : PROGRAM_SEED_VERSION;
+    let seededVersion = await DB.kvGet("programSeedVersion", null);
+    if (seededVersion == null) {
+      // Pre-versioning installs only carried a boolean "programSeeded" flag.
+      seededVersion = (await DB.kvGet("programSeeded", false)) ? 1 : 0;
     }
+    if (seededVersion >= version) return;
+    const hasOldSeed = state.routines.some((r) => String(r.id).startsWith("seed-"));
+    if (seededVersion > 0 && !hasOldSeed) {
+      // Was seeded before but the person deleted the program — respect that.
+      await DB.kvSet("programSeedVersion", version);
+      return;
+    }
+    if (seededVersion === 0 && state.routines.length > 0 && !hasOldSeed) {
+      // Never seeded, but they already built their own routines — don't intrude.
+      await DB.kvSet("programSeedVersion", version);
+      return;
+    }
+    const seeded = PROGRAM_SEED.map((r) => ({
+      id: r.id,
+      name: r.name,
+      exercises: r.exercises.map((e) => ({
+        exerciseId: e.exerciseId,
+        note: e.note || "",
+        sets: e.sets.map((s) => ({
+          weight: s.weight === "" || s.weight == null ? "" : s.weight,
+          reps: s.reps === "" || s.reps == null ? "" : s.reps,
+          isWarmup: !!s.isWarmup,
+        })),
+      })),
+    }));
+    // Drop every old seeded routine (including ones whose ids aren't reused),
+    // then write the new program in.
+    const oldSeeds = state.routines.filter((r) => String(r.id).startsWith("seed-"));
+    await Promise.all(oldSeeds.map((r) => DB.delete("routines", r.id)));
+    state.routines = state.routines.filter((r) => !String(r.id).startsWith("seed-"));
+    await Promise.all(seeded.map((r) => DB.put("routines", r)));
+    state.routines = [...seeded, ...state.routines];
+    await DB.kvSet("programSeedVersion", version);
+    await DB.kvSet("programSeeded", true);
   }
 
   function saveSettings() { DB.kvSet("settings", state.settings); }
   function saveActiveWorkout() { DB.kvSet("activeWorkout", state.activeWorkout); }
-  function saveRestTimer() {
-    DB.kvSet("restTimer", restTimer.endTime ? { endTime: restTimer.endTime, exerciseName: restTimer.exerciseName, id: restTimer.id } : null);
-  }
 
   // ---------- Router ----------
   function parseHash() {
@@ -292,8 +320,7 @@
 
   // ---------- Tap sounds ----------
   // One shared AudioContext, reused for every tap — creating a fresh one
-  // per click (like the rest-timer beep() does, since that only fires
-  // rarely) would be wasteful for something that fires on every button
+  // per click would be wasteful for something that fires on every button
   // press. Kept lazy since AudioContext can't be created before a user
   // gesture on most browsers anyway.
   let tapAudioCtx = null;
@@ -358,228 +385,6 @@
     playTapSound(kindOverride || classifyTapSound(el));
   }
 
-  // ---------- Notifications (real push, works locked/backgrounded) ----------
-  // Rest-timer alerts used to rely on the app's own JS timer calling the
-  // Notification API directly — which only ever runs while the tab is in
-  // the foreground, so nothing showed up once the phone was locked or the
-  // app was backgrounded. Real lock-screen delivery requires an actual Web
-  // Push message sent by a server at the right time (see push-worker/ in
-  // this repo); this app subscribes to that here and schedules/cancels a
-  // push whenever a rest timer starts/stops.
-  function notificationStatus() {
-    if (!("Notification" in window) || !("PushManager" in window)) return { label: "Not supported", cls: "badge-muted", canRequest: false };
-    if (Notification.permission === "denied") return { label: "Blocked", cls: "badge-muted", canRequest: false };
-    if (Notification.permission === "granted" && state.pushSubscribed) return { label: "Enabled", cls: "badge-success", canRequest: false };
-    return { label: "Not enabled", cls: "badge-muted", canRequest: true };
-  }
-
-  function urlBase64ToUint8Array(base64String) {
-    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-    const rawData = atob(base64);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-    return outputArray;
-  }
-
-  async function enablePushNotifications() {
-    if (!("Notification" in window) || !("PushManager" in window) || !("serviceWorker" in navigator)) {
-      showToast("Notifications aren't supported in this browser");
-      return;
-    }
-    try {
-      const perm = await Notification.requestPermission();
-      if (perm !== "granted") {
-        showToast(perm === "denied" ? "Blocked — enable in Settings > Notifications" : "Notifications not enabled");
-        render();
-        return;
-      }
-      const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY) });
-      }
-      await DB.kvSet("pushSubscription", sub.toJSON());
-      state.pushSubscribed = true;
-      showToast("Notifications enabled");
-    } catch (e) {
-      showToast("Couldn't enable notifications");
-    }
-    render();
-  }
-
-  async function getPushSubscription() {
-    return DB.kvGet("pushSubscription", null);
-  }
-
-  // Best-effort: if PUSH_API_BASE isn't configured yet, or there's no
-  // subscription, or the network call fails, these silently no-op — the
-  // in-app beep/vibration/banner still work regardless.
-  async function scheduleServerPush(id, fireInSeconds, title, body, tag) {
-    if (!PUSH_API_BASE || !id) return;
-    try {
-      const subscription = await getPushSubscription();
-      if (!subscription) return;
-      await fetch(`${PUSH_API_BASE}/schedule`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, subscription, fireInSeconds, title, message: body, tag }),
-      });
-    } catch (e) { /* best-effort */ }
-  }
-
-  async function cancelServerPush(id) {
-    if (!PUSH_API_BASE || !id) return;
-    try {
-      await fetch(`${PUSH_API_BASE}/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id }),
-      });
-    } catch (e) { /* best-effort */ }
-  }
-
-  function newTimerId() {
-    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  }
-
-  // Foreground-only fallback notification, used only while PUSH_API_BASE
-  // isn't configured (no backend deployed yet). Once a backend is wired up,
-  // the scheduled server push covers this same moment (and the locked/
-  // backgrounded case too), so this stops being called — see startTimerLoop.
-  async function notifyRestDoneLocally(exerciseName) {
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-    const { title, body } = restNotificationCopy(exerciseName);
-    try {
-      if ("serviceWorker" in navigator) {
-        const reg = await navigator.serviceWorker.ready;
-        reg.showNotification(title, { body, icon: "icons/icon-192.png", badge: "icons/icon-192.png", tag: "rest-timer", renotify: true });
-      } else {
-        new Notification(title, { body, icon: "icons/icon-192.png" });
-      }
-    } catch (e) { /* notifications unavailable */ }
-  }
-
-  // ---------- Rest timer ----------
-  function beep() {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const o = ctx.createOscillator();
-      const g = ctx.createGain();
-      o.type = "sine";
-      o.frequency.value = 880;
-      g.gain.setValueAtTime(0.001, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-      o.connect(g).connect(ctx.destination);
-      o.start();
-      o.stop(ctx.currentTime + 0.45);
-    } catch (e) { /* audio not available */ }
-    if (navigator.vibrate) navigator.vibrate([200, 80, 200]);
-  }
-
-  function restNotificationCopy(exerciseName) {
-    return {
-      title: "Rest complete",
-      body: exerciseName ? `Time for your next set — ${exerciseName}` : "Time for your next set",
-    };
-  }
-
-  function startRest(seconds, exerciseName) {
-    restTimer.endTime = Date.now() + seconds * 1000;
-    restTimer.exerciseName = exerciseName;
-    restTimer.id = newTimerId();
-    saveRestTimer();
-    startTimerLoop();
-    const { title, body } = restNotificationCopy(exerciseName);
-    scheduleServerPush(restTimer.id, seconds, title, body, "rest-timer");
-  }
-
-  function adjustRest(deltaSec) {
-    if (!restTimer.endTime) return;
-    restTimer.endTime += deltaSec * 1000;
-    if (restTimer.endTime < Date.now()) restTimer.endTime = Date.now();
-    saveRestTimer();
-    renderRestBar();
-    // The old scheduled push is now wrong (fires at the old time) — cancel
-    // it and schedule a fresh one for the new remaining duration.
-    const oldId = restTimer.id;
-    restTimer.id = newTimerId();
-    saveRestTimer();
-    cancelServerPush(oldId);
-    const remaining = Math.max(0, (restTimer.endTime - Date.now()) / 1000);
-    const { title, body } = restNotificationCopy(restTimer.exerciseName);
-    scheduleServerPush(restTimer.id, remaining, title, body, "rest-timer");
-  }
-
-  // Stops the countdown loop dead, right now — cancels both the pending
-  // animation frame AND the pending setTimeout it schedules (see
-  // startTimerLoop below), so there's no stray tick left in flight that
-  // could resurrect the bar or re-fire the "rest done" beep/notification
-  // a moment later.
-  function stopTimerLoop() {
-    cancelAnimationFrame(restTimer.raf);
-    clearTimeout(restTimer.timeoutId);
-    restTimer.raf = null;
-    restTimer.timeoutId = null;
-  }
-
-  function skipRest() {
-    cancelServerPush(restTimer.id);
-    restTimer.endTime = null;
-    restTimer.id = null;
-    saveRestTimer();
-    stopTimerLoop();
-    renderRestBar();
-  }
-
-  function startTimerLoop() {
-    stopTimerLoop();
-    const tick = () => {
-      if (!restTimer.endTime) { renderRestBar(); return; }
-      const remaining = (restTimer.endTime - Date.now()) / 1000;
-      if (remaining <= 0) {
-        beep();
-        // The scheduled server push (see startRest) is what shows a real
-        // system/lock-screen notification, whether the app is open or not —
-        // but that only works once PUSH_API_BASE points at a deployed
-        // backend. Until then, fall back to the old foreground-only local
-        // notification so this doesn't regress to "nothing at all" while
-        // the app is open and visible.
-        if (!PUSH_API_BASE) notifyRestDoneLocally(restTimer.exerciseName);
-        restTimer.endTime = null;
-        restTimer.id = null;
-        saveRestTimer();
-        renderRestBar();
-        return;
-      }
-      renderRestBar();
-      restTimer.raf = requestAnimationFrame(() => {
-        restTimer.timeoutId = setTimeout(tick, 200);
-      });
-    };
-    tick();
-  }
-
-  function renderRestBar() {
-    const bar = document.getElementById("restbar");
-    const timeEl = document.getElementById("restbar-time");
-    if (restTimer.endTime) {
-      const remaining = (restTimer.endTime - Date.now()) / 1000;
-      bar.classList.remove("hidden");
-      timeEl.textContent = fmtTime(remaining);
-      // Reserve space at the top of #app equal to the bar's real height so it
-      // never overlaps the topbar (e.g. the Finish button) while resting.
-      document.documentElement.style.setProperty("--restbar-h", bar.offsetHeight + "px");
-    } else {
-      bar.classList.add("hidden");
-      document.documentElement.style.setProperty("--restbar-h", "0px");
-    }
-  }
-
-  document.getElementById("rest-minus").addEventListener("click", () => { tapFeedback(null, "toggle"); adjustRest(-15); });
-  document.getElementById("rest-plus").addEventListener("click", () => { tapFeedback(null, "toggle"); adjustRest(15); });
-  document.getElementById("rest-skip").addEventListener("click", () => { tapFeedback(null); skipRest(); });
 
   // ---------- Set / workout helpers ----------
   function lastCompletedWorkoutFor(exerciseId, excludeWorkoutId) {
@@ -666,14 +471,15 @@
   }
 
   // ---------- Effort scoring ----------
-  // Every completed workout gets a 0-100 "effort score" that blends three
-  // things: how much weight/reps you actually moved (volume), how close
-  // each set was to your all-time best for that exercise (intensity — so
-  // grinding near a PR outranks easy-weight volume), and how inherently
-  // demanding the exercise itself is (a squat taxes far more than a curl,
-  // even at the "same" relative intensity). The score is normalized
-  // against your own historical best, so it self-calibrates as you get
-  // stronger instead of chasing a fixed, arbitrary ceiling.
+  // Every completed workout gets a 0-100 "effort score" built from hard
+  // sets: each working set contributes based mostly on how close it was to
+  // your all-time best for that exercise (so a near-max triple counts for
+  // about as much as a hard set of 8 — heavy strength work is NOT scored
+  // by rep count), with a mild rep bonus, scaled by how inherently
+  // demanding the exercise is (a squat taxes far more than a curl, even at
+  // the "same" relative intensity). The score is normalized against your
+  // own historical best, so it self-calibrates as you get stronger instead
+  // of chasing a fixed, arbitrary ceiling.
 
   // Difficulty is a heuristic (equipment x muscle-mass x movement pattern),
   // not a manual lookup table, so it applies automatically to custom
@@ -771,22 +577,50 @@
     return weight;
   }
 
+  // How steeply per-set effort rises with proximity to your max. >1 means
+  // heavy sets near your 1RM count for much more than the same "set" done
+  // light — the physiological reality of strength training, and what stops
+  // a 4×3 heavy day from being out-scored by any moderate high-rep day
+  // purely on rep count.
+  const INTENSITY_EMPHASIS = 2.2;
+  // Default per-set effort for unweighted sets (see computeSetEffort).
+  const UNWEIGHTED_SET_EFFORT = 0.35;
+  // A workout's raw effort is the AVERAGE quality of its hard sets, scaled
+  // by a set-count factor that saturates here — so a normal 10+ working-set
+  // session gets full credit and a 4-set drop-in doesn't, but an 18-set
+  // marathon can't out-score a brutal 11-set heavy day on volume alone.
+  const EFFORT_SET_SATURATION = 10;
+
   // Per-set contribution to a workout's effort score. Warmups and empty
   // sets contribute nothing. Intensity is this set's estimated 1RM as a
   // fraction of your all-time best for the exercise (capped so one huge
-  // PR set doesn't dominate the whole workout), so the same rep count
-  // scores higher when it's genuinely close to your limit.
+  // PR set doesn't dominate the whole workout).
+  //
+  // A hard set is a hard set: effort is per-SET, driven primarily by how
+  // close the set was to your limit (intensity^INTENSITY_EMPHASIS), with
+  // only a mild rep bonus (a set of 8 is worth a bit more than a set of 3
+  // at the same relative intensity, but nowhere near 8/3 as much). This is
+  // deliberate — scoring reps linearly made low-rep, near-max strength
+  // work (e.g. squat 4×3 @ 85%) read as a fraction of an easy pump day,
+  // which is backwards.
   function computeSetEffort(set, ex, bestE1rm) {
     if (!set || !set.completed || set.isWarmup) return 0;
     const reps = set.reps || 0;
     if (reps <= 0) return 0;
     const load = effectiveLoad(set, ex);
+    const repFactor = 0.7 + 0.3 * (Math.min(reps, 10) / 10);
+    const heightFactor = heightRomFactor(ex, state.settings.heightIn);
+    if (load <= 0) {
+      // Unweighted work (dead bugs, ab wheel, planks logged without load):
+      // count it as a modest default instead of letting the intensity floor
+      // crater the whole workout's per-set average.
+      return UNWEIGHTED_SET_EFFORT * repFactor * exerciseDifficulty(ex) * heightFactor;
+    }
     const thisE1rm = estOneRm(load, reps);
     const intensity = bestE1rm > 0
-      ? Math.max(0.3, Math.min(1.3, thisE1rm / bestE1rm))
+      ? Math.max(0.3, Math.min(1.05, thisE1rm / bestE1rm))
       : NEW_EXERCISE_INTENSITY;
-    const heightFactor = heightRomFactor(ex, state.settings.heightIn);
-    return reps * intensity * exerciseDifficulty(ex) * heightFactor;
+    return Math.pow(intensity, INTENSITY_EMPHASIS) * repFactor * exerciseDifficulty(ex) * heightFactor;
   }
 
   // How "complete" a session is, independent of how hard any single set
@@ -798,9 +632,11 @@
   // Both saturate (more isn't better past a normal, complete session —
   // this isn't a reward for cramming in 15 exercises), and muscle-group
   // variety is weighted higher than raw exercise count since it's the
-  // more direct "different exercises worked" signal. A single exercise
-  // hitting a single muscle group lands around 0.3; a well-rounded
-  // 4+-exercise, 3+-muscle-group session hits the full 1.0.
+  // more direct "different exercises worked" signal. Muscle variety
+  // saturates at just TWO groups: a focused powerlifting day (squat +
+  // squat variations + core, or bench + bench variations + back) is a
+  // complete, legitimate session, not a partial one — only a true
+  // one-exercise, one-muscle session gets discounted (~0.4).
   function workoutCoverage(exercises) {
     if (!exercises || exercises.length === 0) return 0;
     const muscles = new Set();
@@ -809,23 +645,35 @@
       if (ex) muscles.add(ex.muscle);
     }
     const countFactor = Math.min(1, exercises.length / 4);
-    const muscleFactor = Math.min(1, muscles.size / 3);
+    const muscleFactor = Math.min(1, muscles.size / 2);
     return 0.4 * countFactor + 0.6 * muscleFactor;
   }
 
-  // Raw (unbounded) effort total for a set of exercises, e.g. the working
-  // sets logged in one workout — discounted by how complete the session
-  // was (see workoutCoverage) so a single hard-hit exercise doesn't
-  // out-rank a fuller, more balanced workout just because it was heavier.
-  function computeWorkoutEffort(exercises) {
-    let raw = 0;
+  // Raw effort for one workout's exercises: average hard-set quality x a
+  // saturating set-count factor x coverage. `bestFor(exerciseId)` supplies
+  // the personal-best e1RM to judge intensity against — live scoring uses
+  // all-time bests, the history backfill uses bests-as-of-that-date.
+  // Averaging (instead of summing) per-set effort is what keeps a heavy,
+  // low-rep strength day competitive with a longer accessory day: the
+  // score reflects how hard the average set was, not how many sets fit in
+  // the session.
+  function computeEffortRaw(exercises, bestFor) {
+    let total = 0, workingSets = 0;
     for (const e of exercises) {
       const ex = exerciseById(e.exerciseId);
       if (!ex) continue;
-      const best = bestE1rmAllTime(e.exerciseId);
-      for (const s of e.sets) raw += computeSetEffort(s, ex, best);
+      const best = bestFor(e.exerciseId);
+      for (const s of e.sets) {
+        const eff = computeSetEffort(s, ex, best);
+        if (eff > 0) { total += eff; workingSets++; }
+      }
     }
-    return raw * workoutCoverage(exercises);
+    if (!workingSets) return 0;
+    return (total / Math.max(workingSets, EFFORT_SET_SATURATION)) * workoutCoverage(exercises);
+  }
+
+  function computeWorkoutEffort(exercises) {
+    return computeEffortRaw(exercises, (id) => bestE1rmAllTime(id));
   }
 
   // Converts a raw effort total into a 0-100 score by comparing it against
@@ -868,7 +716,7 @@
   // Bump this whenever the effort formula changes meaningfully, so
   // existing history gets recomputed under the new rules instead of
   // being stuck with scores from an old formula (see backfillEffortScores).
-  const EFFORT_SCORE_VERSION = 2;
+  const EFFORT_SCORE_VERSION = 3;
 
   // One-time-per-version migration: (re)computes effortRaw/effortScore for
   // any workout that either predates this feature or was scored under an
@@ -884,15 +732,8 @@
     let bestRawSoFar = 0;
     for (const w of chron) {
       if (w.effortVersion !== EFFORT_SCORE_VERSION) {
-        let raw = 0;
-        for (const e of w.exercises) {
-          const ex = exerciseById(e.exerciseId);
-          if (!ex) continue;
-          const priorBest = bestE1rmSoFar[e.exerciseId] || 0;
-          for (const s of e.sets) raw += computeSetEffort(s, ex, priorBest);
-        }
+        const raw = computeEffortRaw(w.exercises, (id) => bestE1rmSoFar[id] || 0);
         const coverage = workoutCoverage(w.exercises);
-        raw *= coverage;
         const denom = Math.max(raw, bestRawSoFar) || 1;
         const relative = Math.round((raw / denom) * 100);
         w.effortRaw = raw;
@@ -919,7 +760,6 @@
             exerciseId: re.exerciseId,
             name: exerciseById(re.exerciseId)?.name || "Exercise",
             note: re.note || "",
-            restSec: re.restSec || state.settings.defaultRestSec,
             sets: buildWorkoutSetsFromRoutine(re.exerciseId, re.sets),
           };
         })
@@ -978,7 +818,6 @@
     state.workouts.unshift(record);
     state.activeWorkout = null;
     stopWorkoutClock();
-    skipRest();
     await DB.kvSet("activeWorkout", null);
     navigate("workout-complete", { id: record.id });
   }
@@ -986,7 +825,6 @@
   function discardWorkout() {
     state.activeWorkout = null;
     stopWorkoutClock();
-    skipRest();
     DB.kvSet("activeWorkout", null);
     navigate("home");
   }
@@ -1011,9 +849,6 @@
       case "exercise-detail": renderExerciseDetail(params); break;
       default: renderHome(); break;
     }
-    // Keep the rest-timer bar (and the #app top padding that makes room for
-    // it) in sync no matter which screen we just rendered.
-    renderRestBar();
 
     // Only animate + scroll-to-top on an actual navigation (the hash
     // changed) — not on in-place re-renders triggered by things like
@@ -1026,6 +861,48 @@
       appEl.classList.add("app-enter");
     }
     lastRenderedHash = location.hash;
+  }
+
+  // Which metric the home-page progress chart shows. In-memory only — it
+  // resets to effort on each launch, which is the more meaningful default.
+  let homeChartMetric = "effort"; // "effort" | "volume"
+
+  // Recent workouts (oldest -> newest) mapped to chart points for the
+  // currently selected home metric.
+  function homeProgressData() {
+    const recent = state.workouts.slice(0, 12).reverse();
+    if (homeChartMetric === "volume") {
+      return recent.map((w) => ({ date: w.date, value: volumeDisplayValue(w) }));
+    }
+    return recent
+      .filter((w) => typeof w.effortScore === "number")
+      .map((w) => ({ date: w.date, value: w.effortScore }));
+  }
+
+  function homeChartFormat() {
+    return homeChartMetric === "volume"
+      ? (v) => `${Math.round(v).toLocaleString()} ${unitLabel()}`
+      : (v) => `${Math.round(v)}% effort`;
+  }
+
+  // Glanceable progress overview at the top of Home: one trend line across
+  // recent workouts, toggleable between effort score and total volume.
+  function renderHomeProgressSection() {
+    const data = homeProgressData();
+    if (data.length < 2) return "";
+    const label = homeChartMetric === "volume" ? "Total volume across recent workouts" : "Effort score across recent workouts";
+    return `
+      <div class="section">
+        <div class="row" style="margin-bottom:8px;">
+          <h3 style="margin:0;">Progress</h3>
+          <div class="segmented" style="width:170px;">
+            <button data-action="home-chart-metric" data-metric="effort" class="${homeChartMetric === "effort" ? "active" : ""}">Effort</button>
+            <button data-action="home-chart-metric" data-metric="volume" class="${homeChartMetric === "volume" ? "active" : ""}">Volume</button>
+          </div>
+        </div>
+        <div class="chart-wrap">${renderLineChart(data, { label })}</div>
+      </div>
+    `;
   }
 
   function renderHome() {
@@ -1068,6 +945,8 @@
         <button class="fab-add" data-action="new-routine">+ New routine</button>
       </div>
 
+      ${renderHomeProgressSection()}
+
       ${last ? `
         <div class="section">
           <h3>Last workout</h3>
@@ -1080,12 +959,20 @@
           </div>
         </div>` : ""}
     `;
+    const pd = homeProgressData();
+    if (pd.length >= 2) initProgressChart(document.getElementById("progress-chart"), pd, homeChartFormat());
+  }
+
+  // Total working-set volume (weight x reps) in the current display unit,
+  // as a number — totalVolume below is the formatted-string version.
+  function volumeDisplayValue(workout) {
+    let v = 0;
+    for (const e of workout.exercises) for (const s of e.sets) if (!s.isWarmup) v += (s.weight || 0) * (s.reps || 0);
+    return displayUnit() === "kg" ? lbToKg(v) : v;
   }
 
   function totalVolume(workout) {
-    let v = 0;
-    for (const e of workout.exercises) for (const s of e.sets) if (!s.isWarmup) v += (s.weight || 0) * (s.reps || 0);
-    return Math.round(weightToDisplay(v) || 0).toLocaleString();
+    return Math.round(volumeDisplayValue(workout)).toLocaleString();
   }
 
   function renderHistory(params) {
@@ -1190,7 +1077,10 @@
     }));
 
     const chartData = history.filter((h) => h.workingSets.length).slice(0, 12).reverse()
-      .map((h) => ({ date: h.date, weightLb: Math.max(...h.workingSets.map((s) => s.weight || 0)) }));
+      .map((h) => {
+        const maxLb = Math.max(...h.workingSets.map((s) => s.weight || 0));
+        return { date: h.date, value: displayUnit() === "kg" ? lbToKg(maxLb) : maxLb };
+      });
 
     appEl.innerHTML = `
       <div class="topbar">
@@ -1210,7 +1100,7 @@
             <div class="stat-value">${Math.round(weightToDisplay(bestE1rm))} ${unitLabel()}</div>
           </div>
         </div>
-        <div class="chart-wrap">${renderLineChart(chartData)}</div>
+        <div class="chart-wrap">${renderLineChart(chartData, { label: "Weight progress over recent sessions" })}</div>
       ` : emptyStateHtml("No history yet", "Log this exercise in a workout to see progress.", "history")}
 
       ${history.length ? `
@@ -1224,7 +1114,7 @@
       ` : ""}
     `;
 
-    if (bestSet && chartData.length >= 2) initProgressChart(document.getElementById("progress-chart"), chartData);
+    if (bestSet && chartData.length >= 2) initProgressChart(document.getElementById("progress-chart"), chartData, (v) => `${roundClean(v)} ${unitLabel()}`);
   }
 
   // Catmull-Rom -> cubic Bezier smoothing, so the trend line reads as one
@@ -1246,16 +1136,17 @@
     return d;
   }
 
-  // Renders the weight-over-time trend chart for an exercise. Teal always
-  // encodes weight (the line + y-axis), orange always encodes time (ticks,
-  // date labels, the drag cursor) — colors sampled from the app icon.
-  function renderLineChart(data) {
+  // Renders a value-over-time trend chart. `data` is [{date, value}] with
+  // values already in display units. Teal always encodes the value (the
+  // line + y-axis), orange always encodes time (ticks, date labels, the
+  // drag cursor) — colors sampled from the app icon.
+  function renderLineChart(data, opts = {}) {
     if (data.length < 2) {
       return `<div class="chart-empty">Log one more session to see your trend</div>`;
     }
     const W = 320, H = 176, padX = 14, padTop = 18, padBottom = 34;
     const baseY = H - padBottom;
-    const disp = data.map((d) => (displayUnit() === "kg" ? lbToKg(d.weightLb) : d.weightLb));
+    const disp = data.map((d) => d.value);
     const min = Math.min(...disp), max = Math.max(...disp);
     const range = (max - min) || Math.max(max, 1) * 0.1 || 1;
     const padRange = range * 0.18;
@@ -1282,7 +1173,7 @@
 
     return `
       <div class="chart" id="progress-chart">
-        <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Weight progress over recent sessions">
+        <svg class="chart-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${escapeHtml(opts.label || "Progress over recent sessions")}">
           <defs>
             <linearGradient id="chartAreaGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="var(--chart-weight)" stop-opacity="0.30" />
@@ -1310,7 +1201,7 @@
   // Wires up entrance animation + drag/hover interactivity for the chart
   // rendered by renderLineChart. Runs once, right after the markup above
   // is inserted into the DOM.
-  function initProgressChart(container, data) {
+  function initProgressChart(container, data, format) {
     if (!container) return;
     const svg = container.querySelector(".chart-svg");
     const line = svg.querySelector(".chart-line");
@@ -1363,9 +1254,8 @@
       cursorDot.setAttribute("cy", dotCy[i]);
       cursor.classList.add("visible");
 
-      const weightLb = data[i].weightLb;
-      const wDisp = displayUnit() === "kg" ? lbToKg(weightLb) : weightLb;
-      tooltip.innerHTML = `<span class="tt-weight">${roundClean(wDisp)} ${unitLabel()}</span><span class="tt-date">${escapeHtml(fmtDate(data[i].date))}</span>`;
+      const label = format ? format(data[i].value) : roundClean(data[i].value);
+      tooltip.innerHTML = `<span class="tt-weight">${label}</span><span class="tt-date">${escapeHtml(fmtDate(data[i].date))}</span>`;
       const rect = svg.getBoundingClientRect();
       const scaleX = rect.width / 320, scaleY = rect.height / 176;
       tooltip.style.left = `${dotCx[i] * scaleX}px`;
@@ -1404,7 +1294,6 @@
 
   function renderSettings() {
     const s = state.settings;
-    const notif = notificationStatus();
     appEl.innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
 
@@ -1456,32 +1345,6 @@
         </div>
       </div>
 
-      <div class="section">
-        <h3>Rest timer</h3>
-        <div class="card">
-          <div class="row">
-            <span>Default rest duration</span>
-            <div class="row-gap">
-              <button class="icon-btn" data-action="default-rest-adjust" data-delta="-15">-15</button>
-              <span style="font-weight:700; min-width:48px; text-align:center;">${fmtTime(s.defaultRestSec)}</span>
-              <button class="icon-btn" data-action="default-rest-adjust" data-delta="15">+15</button>
-            </div>
-          </div>
-          <div class="tiny muted" style="margin-top:8px;">Rest starts automatically whenever you mark a set complete. Each exercise can override this during a workout.</div>
-        </div>
-      </div>
-
-      <div class="section">
-        <h3>Notifications</h3>
-        <div class="card">
-          <div class="row">
-            <span>Rest timer alerts</span>
-            <span class="badge ${notif.cls}">${notif.label}</span>
-          </div>
-          ${notif.canRequest ? `<button class="btn" style="margin-top:12px;" data-action="enable-notifications">Enable notifications</button>` : ""}
-          <div class="tiny muted" style="margin-top:8px;">Shows up even if your phone is locked or Just Lift isn't open. On iPhone, you need to add Just Lift to your Home Screen first (Share &rarr; Add to Home Screen) — Safari only allows notifications for installed web apps.</div>
-        </div>
-      </div>
 
       <div class="section">
         <h3>Haptics</h3>
@@ -1523,7 +1386,6 @@
       delete re.targetWeight;
     }
     if (re.note == null) re.note = "";
-    if (re.restSec == null) re.restSec = state.settings.defaultRestSec;
     return re;
   }
 
@@ -1572,13 +1434,6 @@
                   <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="routine-set-reps" data-index="${i}" data-setidx="${si}" value="${s.reps === "" || s.reps == null ? "" : s.reps}" placeholder="0" /></td>
                   <td><button class="set-remove-btn" data-action="remove-routine-set" data-index="${i}" data-setidx="${si}" aria-label="Remove set">${ICONS.close}</button></td>
                 </tr>
-                <tr class="rest-divider-row"><td colspan="4">
-                  <div class="rest-divider">
-                    <button class="rest-divider-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="-15" aria-label="Decrease rest 15 seconds">−15</button>
-                    <span class="rest-divider-time">${fmtTime(re.restSec)}</span>
-                    <button class="rest-divider-btn" data-action="routine-rest-adjust" data-index="${i}" data-delta="15" aria-label="Increase rest 15 seconds">+15</button>
-                  </div>
-                </td></tr>
               `; }).join("")}
             </table>
             <button class="icon-btn" style="width:100%;" data-action="add-routine-set" data-index="${i}">+ Add set</button>
@@ -1613,7 +1468,6 @@
       w.name = e.target.value || "Workout";
       saveActiveWorkout();
     });
-    renderRestBar();
     startWorkoutClock();
   }
 
@@ -1672,13 +1526,6 @@
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">${ICONS.check}</button></td>
               <td><button class="set-remove-btn" data-action="remove-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Remove set">${ICONS.close}</button></td>
             </tr>
-            <tr class="rest-divider-row"><td colspan="6">
-              <div class="rest-divider">
-                <button class="rest-divider-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="-15" aria-label="Decrease rest 15 seconds">−15</button>
-                <span class="rest-divider-time">${fmtTime(ex.restSec)}</span>
-                <button class="rest-divider-btn" data-action="ex-rest-adjust" data-exidx="${exIdx}" data-delta="15" aria-label="Increase rest 15 seconds">+15</button>
-              </div>
-            </td></tr>
           `; }).join("")}
         </table>
         <button class="icon-btn" data-action="add-set" data-exidx="${exIdx}">+ Add set</button>
@@ -1836,6 +1683,9 @@
         break;
       }
       case "view-workout": navigate("workout-detail", { id: t.dataset.id }); break;
+      case "home-chart-metric":
+        if (homeChartMetric !== t.dataset.metric) { homeChartMetric = t.dataset.metric; render(); }
+        break;
       case "complete-done": navigate("home"); break;
       case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
@@ -1851,15 +1701,10 @@
         state.settings.activeUnit = t.dataset.unit;
         saveSettings(); render();
         break;
-      case "default-rest-adjust":
-        state.settings.defaultRestSec = Math.max(0, state.settings.defaultRestSec + parseInt(t.dataset.delta, 10));
-        saveSettings(); render();
-        break;
       case "set-haptics":
         state.settings.hapticsEnabled = t.dataset.value === "on";
         saveSettings(); render();
         break;
-      case "enable-notifications": enablePushNotifications(); break;
       case "export-data": exportData(); break;
       case "import-data": document.getElementById("import-file-input").click(); break;
       case "reset-data": resetData(); break;
@@ -1874,12 +1719,6 @@
       case "routine-ex-menu":
         openExerciseMenu(parseInt(t.dataset.index, 10), "routine");
         break;
-      case "routine-rest-adjust": {
-        const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
-        re.restSec = Math.max(0, re.restSec + parseInt(t.dataset.delta, 10));
-        render();
-        break;
-      }
       case "add-routine-set": {
         const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
         re.sets.push({ weight: "", reps: "", isWarmup: false });
@@ -1918,12 +1757,6 @@
       case "workout-ex-menu":
         openExerciseMenu(parseInt(t.dataset.exidx, 10), "workout");
         break;
-      case "ex-rest-adjust": {
-        const ex = state.activeWorkout.exercises[parseInt(t.dataset.exidx, 10)];
-        ex.restSec = Math.max(0, ex.restSec + parseInt(t.dataset.delta, 10));
-        saveActiveWorkout(); render();
-        break;
-      }
       case "toggle-set": {
         const exIdx = parseInt(t.dataset.exidx, 10), setIdx = parseInt(t.dataset.setidx, 10);
         const ex = state.activeWorkout.exercises[exIdx];
@@ -1932,7 +1765,6 @@
         if (s.completed) {
           if (s.weight === "" ) s.weight = 0;
           if (s.reps === "") s.reps = 0;
-          startRest(ex.restSec, ex.name);
         }
         saveActiveWorkout(); render();
         break;
@@ -2274,7 +2106,6 @@
       renderRoutineEdit._draft.exercises.push({
         exerciseId: ex.id,
         note: "",
-        restSec: state.settings.defaultRestSec,
         sets: [
           { weight: "", reps: "", isWarmup: false },
           { weight: "", reps: "", isWarmup: false },
@@ -2288,7 +2119,6 @@
         exerciseId: ex.id,
         name: ex.name,
         note: "",
-        restSec: state.settings.defaultRestSec,
         sets: defaultSetsForExercise(ex.id),
       });
       saveActiveWorkout();
@@ -2434,7 +2264,6 @@
     state.routines = [];
     state.workouts = [];
     state.activeWorkout = null;
-    skipRest();
     navigate("home");
   }
 

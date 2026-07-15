@@ -3,6 +3,7 @@ const DEFAULT_EXERCISES = [
   // Chest
   { id: "barbell-bench-press", name: "Barbell bench press", muscle: "Chest", equipment: "Barbell" },
   { id: "incline-barbell-bench-press", name: "Incline barbell bench press", muscle: "Chest", equipment: "Barbell" },
+  { id: "larsen-spoto-press", name: "Larsen/Spoto press", muscle: "Chest", equipment: "Barbell" },
   { id: "decline-barbell-bench-press", name: "Decline barbell bench press", muscle: "Chest", equipment: "Barbell" },
   { id: "smith-machine-bench-press", name: "Smith machine bench press", muscle: "Chest", equipment: "Machine" },
   { id: "dumbbell-bench-press", name: "Dumbbell bench press", muscle: "Chest", equipment: "Dumbbell" },
@@ -104,6 +105,7 @@ const DEFAULT_EXERCISES = [
   // Legs
   { id: "squat", name: "Barbell squat", muscle: "Legs", equipment: "Barbell" },
   { id: "front-squat", name: "Front squat", muscle: "Legs", equipment: "Barbell" },
+  { id: "pause-squat", name: "Pause squat", muscle: "Legs", equipment: "Barbell" },
   { id: "box-squat", name: "Box squat", muscle: "Legs", equipment: "Barbell" },
   { id: "zercher-squat", name: "Zercher squat", muscle: "Legs", equipment: "Barbell" },
   { id: "romanian-deadlift", name: "Romanian deadlift", muscle: "Legs", equipment: "Barbell" },
