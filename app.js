@@ -1876,6 +1876,11 @@
     const showRpe = !!state.settings.showRpe;
     let workingNum = 0;
     const topWeight = Math.max(0, ...ex.sets.filter((s) => !s.isWarmup).map((s) => s.weight || 0));
+    // Plate math (bar + pairs of plates per side) only makes sense for
+    // barbell-loaded lifts — dumbbells, machines, cables, bodyweight, etc.
+    // don't load a bar, so the calculator is hidden for those.
+    const exMeta = exerciseById(ex.exerciseId);
+    const isBarbell = exMeta && exMeta.equipment === "Barbell";
     const sugg = progressionSuggestion(ex.exerciseId);
     const ssChip = ssInfo ? `<span class="ss-chip">${ssInfo.letter}</span>` : "";
     const ssClass = ssInfo ? `superset-member ${ssInfo.first ? "superset-first" : ""} ${ssInfo.last ? "superset-last" : ""}` : "";
@@ -1889,7 +1894,7 @@
             ${sugg && sugg.bumped ? `<div class="ex-suggest">▲ Suggested: ${weightToDisplay(sugg.next)} ${u} <span class="muted">(last ${weightToDisplay(sugg.last)}×${sugg.reps})</span></div>` : ""}
           </div>
           <div class="ex-header-actions">
-            ${topWeight > 0 ? `<button class="ex-plate-btn" data-action="plate-calc" data-exidx="${exIdx}" aria-label="Plate calculator">${ICONS.barbell}</button>` : ""}
+            ${isBarbell && topWeight > 0 ? `<button class="ex-plate-btn" data-action="plate-calc" data-exidx="${exIdx}" aria-label="Plate calculator">${ICONS.barbell}</button>` : ""}
             <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">${ICONS.kebab}</button>
             <button class="icon-btn icon-btn-danger" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
