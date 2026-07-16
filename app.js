@@ -142,6 +142,10 @@
       const idx = exerciseMenuIndex;
       closeExerciseMenu();
       toggleSupersetWithNext(idx);
+    } else if (t.dataset.action === "menu-replace") {
+      const idx = exerciseMenuIndex;
+      closeExerciseMenu();
+      openReplaceExercisePicker(idx);
     }
   });
 
@@ -1876,9 +1880,10 @@
     const ssChip = ssInfo ? `<span class="ss-chip">${ssInfo.letter}</span>` : "";
     const ssClass = ssInfo ? `superset-member ${ssInfo.first ? "superset-first" : ""} ${ssInfo.last ? "superset-last" : ""}` : "";
     return `
-      <div class="exercise-block ${ssClass}">
+      <div class="exercise-block ${ssClass}" data-exidx="${exIdx}">
         <div class="ex-header">
-          <div>
+          <button class="ex-drag-handle" data-exidx="${exIdx}" aria-label="Press and hold to reorder">${ICONS.grip}</button>
+          <div class="ex-header-main">
             <div class="ex-title">${ssChip}${escapeHtml(ex.name)}</div>
             ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
             ${sugg && sugg.bumped ? `<div class="ex-suggest">▲ Suggested: ${weightToDisplay(sugg.next)} ${u} <span class="muted">(last ${weightToDisplay(sugg.last)}×${sugg.reps})</span></div>` : ""}
@@ -2064,6 +2069,7 @@
     kebab: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
     barbell: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="8.5" width="2.5" height="7" rx="1"/><rect x="5.5" y="6.5" width="2.5" height="11" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><rect x="16" y="6.5" width="2.5" height="11" rx="1"/><rect x="19" y="8.5" width="2.5" height="7" rx="1"/></svg>`,
     trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`,
+    grip: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>`,
   };
 
   const EMPTY_STATE_ICONS = {
@@ -2090,6 +2096,143 @@
   appEl.addEventListener("click", onAppClick);
   appEl.addEventListener("input", onAppInput);
   appEl.addEventListener("change", onAppChange);
+  appEl.addEventListener("pointerdown", onExerciseDragHandleDown);
+
+  // ---------- Exercise long-press drag-to-reorder ----------
+  // Press-and-hold the grip handle on an exercise header, then drag
+  // vertically to reorder exercises within the active workout. Built on
+  // pointer events (works for touch + mouse) with a long-press arm delay
+  // so a normal tap/scroll on or near the handle never triggers a drag.
+  const EX_DRAG_LONGPRESS_MS = 380;
+  const EX_DRAG_CANCEL_PX = 10;
+  let exDragArmTimer = null;
+  let exDragArmStart = null;
+  let exDragArmExIdx = null;
+  let exDragCtx = null; // active drag: { exIdx, el, list, metrics, pointerId, pointerStartY, startScrollTop, currentIndex }
+
+  function onExerciseDragHandleDown(e) {
+    const handle = e.target.closest(".ex-drag-handle");
+    if (!handle || !state.activeWorkout) return;
+    e.preventDefault();
+    exDragArmExIdx = parseInt(handle.dataset.exidx, 10);
+    exDragArmStart = { x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+    document.addEventListener("pointermove", onExDragArmMove);
+    document.addEventListener("pointerup", onExDragArmCancel);
+    document.addEventListener("pointercancel", onExDragArmCancel);
+    exDragArmTimer = setTimeout(() => {
+      const armed = exDragArmStart;
+      const idx = exDragArmExIdx;
+      clearExDragArm();
+      beginExerciseDrag(idx, armed.pointerId, armed.y);
+    }, EX_DRAG_LONGPRESS_MS);
+  }
+
+  function onExDragArmMove(e) {
+    if (!exDragArmStart) return;
+    const dx = e.clientX - exDragArmStart.x;
+    const dy = e.clientY - exDragArmStart.y;
+    if (Math.hypot(dx, dy) > EX_DRAG_CANCEL_PX) clearExDragArm();
+  }
+
+  function onExDragArmCancel() { clearExDragArm(); }
+
+  function clearExDragArm() {
+    clearTimeout(exDragArmTimer);
+    exDragArmTimer = null;
+    exDragArmStart = null;
+    document.removeEventListener("pointermove", onExDragArmMove);
+    document.removeEventListener("pointerup", onExDragArmCancel);
+    document.removeEventListener("pointercancel", onExDragArmCancel);
+  }
+
+  function beginExerciseDrag(exIdx, pointerId, pointerStartY) {
+    const list = document.getElementById("workout-exercises");
+    if (!list) return;
+    const blocks = Array.from(list.querySelectorAll(":scope > .exercise-block"));
+    const el = blocks[exIdx];
+    if (!el) return;
+    if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
+    const metrics = blocks.map((b) => ({ top: b.offsetTop, height: b.offsetHeight }));
+    blocks.forEach((b) => { b.style.transition = "transform 0.15s cubic-bezier(0.22, 1, 0.36, 1)"; });
+    el.style.transition = "none";
+    el.classList.add("ex-dragging");
+    exDragCtx = {
+      exIdx,
+      el,
+      list,
+      blocks,
+      metrics,
+      pointerId,
+      pointerStartY,
+      startScrollTop: appEl.scrollTop,
+      currentIndex: exIdx,
+    };
+    document.addEventListener("pointermove", onExerciseDragMove);
+    document.addEventListener("pointerup", onExerciseDragEnd);
+    document.addEventListener("pointercancel", onExerciseDragEnd);
+  }
+
+  function onExerciseDragMove(e) {
+    const ctx = exDragCtx;
+    if (!ctx || e.pointerId !== ctx.pointerId) return;
+    e.preventDefault();
+    const scrollDelta = appEl.scrollTop - ctx.startScrollTop;
+    const dy = e.clientY - ctx.pointerStartY + scrollDelta;
+    ctx.el.style.transform = `translateY(${dy}px)`;
+
+    // Auto-scroll the workout list when dragging near the top/bottom edge
+    // of the visible viewport, so long exercise lists remain reachable.
+    const edge = 70;
+    if (e.clientY < edge) appEl.scrollTop -= 10;
+    else if (e.clientY > window.innerHeight - edge) appEl.scrollTop += 10;
+
+    const draggedMetric = ctx.metrics[ctx.exIdx];
+    const draggedCenter = draggedMetric.top + draggedMetric.height / 2 + dy;
+
+    let newIndex = ctx.exIdx;
+    for (let i = 0; i < ctx.metrics.length; i++) {
+      const m = ctx.metrics[i];
+      if (draggedCenter > m.top + m.height / 2) newIndex = i;
+    }
+    newIndex = Math.max(0, Math.min(ctx.metrics.length - 1, newIndex));
+
+    if (newIndex !== ctx.currentIndex) {
+      ctx.currentIndex = newIndex;
+      const draggedHeight = draggedMetric.height + 12; // include block's margin-bottom
+      ctx.blocks.forEach((b, i) => {
+        if (i === ctx.exIdx) return;
+        let shift = 0;
+        if (i > ctx.exIdx && i <= newIndex) shift = -draggedHeight;
+        else if (i < ctx.exIdx && i >= newIndex) shift = draggedHeight;
+        b.style.transform = shift ? `translateY(${shift}px)` : "";
+      });
+    }
+  }
+
+  function onExerciseDragEnd(e) {
+    const ctx = exDragCtx;
+    if (!ctx || (e.pointerId !== undefined && e.pointerId !== ctx.pointerId)) return;
+    document.removeEventListener("pointermove", onExerciseDragMove);
+    document.removeEventListener("pointerup", onExerciseDragEnd);
+    document.removeEventListener("pointercancel", onExerciseDragEnd);
+
+    ctx.blocks.forEach((b) => {
+      b.style.transition = "";
+      b.style.transform = "";
+    });
+    ctx.el.classList.remove("ex-dragging");
+
+    const finalIndex = ctx.currentIndex;
+    exDragCtx = null;
+
+    if (finalIndex !== ctx.exIdx && state.activeWorkout) {
+      const arr = state.activeWorkout.exercises;
+      const [moved] = arr.splice(ctx.exIdx, 1);
+      arr.splice(finalIndex, 0, moved);
+      saveActiveWorkout();
+      render();
+    }
+  }
 
   function onAppClick(e) {
     const t = e.target.closest("[data-action]");
@@ -2327,7 +2470,8 @@
   const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
   const MUSCLE_GROUPS = ["Chest", "Back", "Shoulders", "Biceps", "Triceps", "Legs", "Core", "Other"];
   const EQUIPMENT_TYPES = ["Barbell", "Dumbbell", "Cable", "Machine", "Bodyweight", "Other"];
-  let pickerContext = null; // "routine" | "workout"
+  let pickerContext = null; // "routine" | "workout" | "replace"
+  let pickerReplaceIndex = null; // exercise index being swapped, when context === "replace"
   let pickerViewMode = "list"; // "list" | "create"
   let newExerciseDraft = null;
 
@@ -2342,11 +2486,21 @@
     requestAnimationFrame(() => overlay.classList.add("open"));
   }
 
+  // Opens the same picker in "replace" mode — selecting an exercise swaps
+  // it in place (same position, same superset grouping, same set count)
+  // instead of appending a new entry to the workout.
+  function openReplaceExercisePicker(index) {
+    pickerReplaceIndex = index;
+    openExercisePicker("replace");
+    document.getElementById("picker-title").textContent = "Replace exercise";
+  }
+
   function closeExercisePicker() {
     const overlay = document.getElementById("exercise-picker");
     overlay.classList.remove("open");
     setTimeout(() => overlay.classList.add("hidden"), 220);
     pickerContext = null;
+    pickerReplaceIndex = null;
     pickerViewMode = "list";
     newExerciseDraft = null;
   }
@@ -2359,7 +2513,7 @@
     document.getElementById("picker-create-row").classList.remove("hidden");
     document.getElementById("picker-body").classList.remove("hidden");
     document.getElementById("picker-create-body").classList.add("hidden");
-    document.getElementById("picker-title").textContent = "Add exercise";
+    document.getElementById("picker-title").textContent = pickerContext === "replace" ? "Replace exercise" : "Add exercise";
     document.getElementById("picker-close").textContent = "Cancel";
   }
 
@@ -2608,6 +2762,24 @@
         sets: defaultSetsForExercise(ex.id),
       });
       saveActiveWorkout();
+      closeExercisePicker();
+      render();
+    } else if (pickerContext === "replace") {
+      const target = state.activeWorkout && state.activeWorkout.exercises[pickerReplaceIndex];
+      if (target) {
+        const oldName = target.name;
+        const setCount = target.sets.length;
+        // Mutate in place (not a new array entry) so position and any
+        // superset grouping (supersetId) carry over untouched. The note
+        // is cleared since it's almost always specific to the old lift
+        // (rep ranges, RPE targets, "-10% of comp bench", etc.).
+        target.exerciseId = ex.id;
+        target.name = ex.name;
+        target.note = "";
+        target.sets = defaultSetsForExercise(ex.id, setCount);
+        saveActiveWorkout();
+        showToast(`Swapped ${oldName} for ${ex.name}`);
+      }
       closeExercisePicker();
       render();
     } else {

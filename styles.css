@@ -140,6 +140,22 @@ button:active:not(:disabled),
 }
 #app::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
+/* Permanent mask over the reserved status-bar safe area. #app's own
+   top padding is *inside* its scrollable border box, so on a standalone/
+   fullscreen PWA, scrolled content can slide up underneath it and stay
+   visible there — this opaque strip sits above #app (but below any
+   full-screen overlay/modal) so nothing ever peeks through, on any
+   screen, at any scroll position. */
+body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: calc(12px + var(--safe-top));
+  background: var(--bg);
+  z-index: 25;
+  pointer-events: none;
+}
+
 /* On navigation the whole view fades in, and its top-level blocks rise in a
    gentle stagger — a premium, composed entrance rather than one flat pop. */
 #app.app-enter { animation: appFade 0.2s ease both; }
@@ -463,21 +479,60 @@ input[type="number"] {
 .set-remove-btn svg { width: 15px; height: 15px; }
 .set-remove-btn:active { background: var(--danger-bg); opacity: 0.7; }
 
-.exercise-block { margin-bottom: 20px; }
+.exercise-block { margin-bottom: 20px; transition: transform 0.15s cubic-bezier(0.22, 1, 0.36, 1); }
 .exercise-block .ex-header {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
   margin-bottom: 12px;
+}
+.ex-header-main {
+  flex: 1;
+  min-width: 0;
 }
 .exercise-block .ex-title {
   font-size: var(--fs-base);
   font-weight: var(--fw-bold);
   margin-bottom: 4px;
-  flex: 1;
   min-width: 0;
   overflow-wrap: break-word;
+}
+/* Drag handle — press and hold to reorder exercises within a workout.
+   44px tap target, but the visible grip glyph stays small/quiet so it
+   doesn't compete visually with the exercise title. touch-action:none
+   keeps iOS from intercepting the press as a scroll gesture, which is
+   what a long-press-to-drag interaction needs. */
+.ex-drag-handle {
+  width: 32px;
+  min-width: 32px;
+  height: 44px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: -6px;
+  color: var(--muted);
+  touch-action: none;
+  cursor: grab;
+  -webkit-tap-highlight-color: transparent;
+}
+.ex-drag-handle svg { width: 18px; height: 18px; }
+.ex-drag-handle:active { color: var(--text); }
+/* Applied to the exercise-block currently being dragged. Lifted visual
+   (shadow + slight scale) makes it read as "picked up"; transform is set
+   inline (translateY) by the drag JS on every pointermove, so transitions
+   are disabled here to keep it tracking the finger with zero lag. */
+.exercise-block.ex-dragging {
+  position: relative;
+  z-index: 50;
+  transition: none;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.18));
+  border-radius: 12px;
+  background: var(--bg);
+  opacity: 0.97;
 }
 .exercise-block .ex-note {
   font-size: var(--fs-xs);
@@ -1111,8 +1166,8 @@ input[type="number"] {
 /* RPE input column — needs a guaranteed minimum width, not just a cap, or
    the browser's table auto-layout can squeeze it below what "8.5" needs
    once the other set-table columns claim space, clipping the typed value. */
-.rpe-cell { width: 46px; min-width: 46px; }
-.rpe-input { width: 100%; max-width: none; padding: 8px 2px; font-size: var(--fs-xs); }
+.rpe-cell { width: 54px; min-width: 54px; }
+.rpe-input { width: 100%; max-width: none; padding: 8px 1px; font-size: var(--fs-2xs); text-align: center; }
 
 /* Progression + suggestion cards */
 .ex-suggest {
