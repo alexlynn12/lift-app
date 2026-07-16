@@ -1094,8 +1094,11 @@ input:focus, select:focus, textarea:focus {
 .set-num-btn.dropset { color: #7a52c9; background: #efe9fb; }
 .set-num-btn.failure { color: var(--danger); background: var(--danger-bg); }
 
-/* RPE input column */
-.rpe-input { max-width: 52px; }
+/* RPE input column — needs a guaranteed minimum width, not just a cap, or
+   the browser's table auto-layout can squeeze it below what "8.5" needs
+   once the other set-table columns claim space, clipping the typed value. */
+.rpe-cell { width: 46px; min-width: 46px; }
+.rpe-input { width: 100%; max-width: none; padding: 8px 2px; font-size: var(--fs-xs); }
 
 /* Progression + suggestion cards */
 .ex-suggest {

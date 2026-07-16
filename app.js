@@ -1902,7 +1902,7 @@
               <td class="set-prev">${prevLabel}</td>
               <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
               <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
-              ${showRpe ? `<td><input class="set-input rpe-input" inputmode="decimal" type="number" step="0.5" min="5" max="10" data-action="set-rpe" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.rpe == null ? "" : s.rpe}" placeholder="–" /></td>` : ""}
+              ${showRpe ? `<td class="rpe-cell"><input class="set-input rpe-input" inputmode="decimal" type="number" step="0.5" min="5" max="10" data-action="set-rpe" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.rpe == null ? "" : s.rpe}" placeholder="–" /></td>` : ""}
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">${ICONS.check}</button></td>
             </tr>
           `; }).join("")}
