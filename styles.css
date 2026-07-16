@@ -296,6 +296,20 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
 }
 
+/* Kill the native up/down spinner on number inputs everywhere. It's not
+   usable at these sizes on touch, and on desktop browsers it eats enough
+   width to visually clip the value in the tightest set-table columns
+   (RPE especially) — full width goes to the digits instead. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 .set-input {
   width: 100%;
   text-align: center;
