@@ -760,37 +760,55 @@
     return weight;
   }
 
-  // ===== Effort model (v4) — three established training-load axes =====
+  // ===== Effort model (v5) — three established training-load axes,
+  // each scored against fixed, published reference points instead of
+  // your own personal-best session =====
   //
-  // The score blends three signals the strength community actually uses to
-  // quantify a session, because no single number captures both a 3×2 @ 88%
-  // peak day and a 5×8 hypertrophy day:
+  // v4 normalized every axis against "your best prior session on that
+  // axis," which sounds sensible but backfires in practice: RPE and %1RM
+  // are *already* self-relative (RPE is defined relative to your own
+  // effort, %1RM relative to your own max), so dividing by your single
+  // best-ever session on top of that meant only your literal lifetime-peak
+  // session could ever read as high effort — a completely solid, hard
+  // RPE 8-9 day would read as a fraction of that one outlier and land
+  // in the 30s. This version keeps the same three signals but scores
+  // each one against the field's own published bands, so a genuinely
+  // hard session reads as hard on its own terms, every time:
   //
-  //  1. INTENSITY / CNS STRESS — the session's TOP SET: peak %1RM raised
-  //     to the 4th power (steep exponential weighting borrowed from
-  //     endurance sport's TRIMP model). "How heavy did you go relative to
-  //     your max" is deliberately a peak measure, not a sum — one single
-  //     at 93% maxes this axis regardless of how little else the session
-  //     contained, which is exactly how peak/test days should read. The
-  //     number of heavy sets is credited on axis 3 instead.
+  //  1. INTENSITY — top working set's effort, on the RPE scale (Reps In
+  //     Reserve). Uses your logged RPE directly when you entered one;
+  //     otherwise estimates it from %1RM vs. your best e1RM using the
+  //     same Epley-curve RIR estimate as before. Scored on a plain
+  //     linear RPE 5→10 ramp (RPE 10 = 100, RPE 8 = 60, RPE 5 or below
+  //     = 0) — the Tuchscherer/RTS RPE chart's own 5-10 working range,
+  //     not a comparison to any other session.
   //
-  //  2. MUSCLE / EFFECTIVE REPS — the "stimulating reps" model (Beardsley):
-  //     only the ~5 reps closest to failure recruit high-threshold motor
-  //     units under full mechanical tension, so each set contributes
-  //     min(reps, 5 − RIR), with RIR estimated by comparing the set's load
-  //     to your best e1RM via the Epley curve. High-rep sets far from
-  //     failure contribute little; hard sets contribute up to 5.
+  //  2. MUSCLE / EFFECTIVE REPS — the "stimulating reps" model
+  //     (Beardsley): only the ~5 reps closest to failure recruit
+  //     high-threshold motor units under full mechanical tension, so
+  //     each set contributes min(reps, 5 − RIR). Summed across the
+  //     session and scored against ~30 total effective reps as a full,
+  //     hard, multi-exercise day (a widely-used rule-of-thumb range for
+  //     weekly-equivalent hard sets scaled to one session).
   //
   //  3. WORK / VOLUME — session INOL (Hristov): reps / (100 − %1RM) per
-  //     set, i.e. volume that gets more expensive as intensity climbs —
-  //     the powerlifting community's standard intensity-adjusted volume
-  //     metric (0.4–1 per lift = normal, >1.5 = brutal).
+  //     set, the powerlifting community's standard intensity-adjusted
+  //     volume metric. Summed across the session and scored against
+  //     Hristov's own published bands (session total ~1.0 = solid
+  //     working day, ~2.0+ = heavy, ~3.0 = a very taxing day).
   //
-  // Each axis is normalized against YOUR best prior session on that axis,
-  // then blended (weights below). A heavy peak week maxes axis 1 even as
-  // axes 2-3 shrink, so the score no longer collapses when weight goes up
-  // and volume comes down; a big hypertrophy day leans on axes 2-3 instead.
+  // Blended with the same weights as before (intensity counts most,
+  // since "how hard was your hardest set" is the most direct effort
+  // signal), then capped by session coverage (see workoutCoverage) so a
+  // one-exercise session can't read as near-total effort no matter how
+  // hard that one exercise was.
   const EFFORT_WEIGHTS = { intensity: 0.40, muscle: 0.35, volume: 0.25 };
+  // Absolute reference points each axis is scored against (see comment
+  // above) — not derived from this person's history, so they don't drift.
+  const INTENSITY_RPE_FLOOR = 5;    // RPE at/below this scores 0
+  const INTENSITY_RPE_CEIL = 10;    // RPE at/above this scores 100
+  const MUSCLE_FULL_SESSION_REPS = 30; // total effective reps ≈ a full hard day
+  const VOLUME_FULL_SESSION_INOL = 3;  // total session INOL ≈ a heavy/taxing day
   // %1RM assumed for a lift with no history yet, and its assumed RIR.
   const FIRST_TIME_PCT = 0.75;
   const FIRST_TIME_RIR = 2;
@@ -821,12 +839,13 @@
     }
     // A logged RPE is ground truth for how close to failure the set was, so
     // it overrides the load-vs-e1RM estimate: RIR ≈ 10 − RPE. A set marked
-    // "to failure" is RIR 0. This makes the Muscle (effective-reps) axis
-    // reflect what actually happened rather than a model guess.
+    // "to failure" is RIR 0. This makes both the intensity (RPE) and the
+    // Muscle (effective-reps) axis reflect what actually happened rather
+    // than a model guess.
     if (set.type === "failure") rir = 0;
     else if (typeof set.rpe === "number" && set.rpe > 0) rir = Math.max(0, 10 - set.rpe);
     return {
-      intensity: Math.pow(pct, 4) * diff,
+      rpe: Math.max(0, Math.min(10, 10 - rir)),
       muscle: Math.max(0, Math.min(reps, 5 - rir)) * diff,
       volume: (reps / (100 - pct * 100)) * diff,
     };
@@ -836,7 +855,7 @@
   // personal-best e1RM reference — live scoring uses all-time bests, the
   // history backfill uses bests-as-of-that-date.
   function workoutEffortMetrics(exercises, bestFor) {
-    const totals = { intensity: 0, muscle: 0, volume: 0 };
+    const totals = { topRpe: 0, muscle: 0, volume: 0 };
     for (const e of exercises) {
       const ex = exerciseById(e.exerciseId);
       if (!ex) continue;
@@ -846,7 +865,7 @@
         if (!m) continue;
         // Intensity is a peak (hardest single set of the session);
         // muscle and volume accumulate.
-        totals.intensity = Math.max(totals.intensity, m.intensity);
+        totals.topRpe = Math.max(totals.topRpe, m.rpe);
         totals.muscle += m.muscle;
         totals.volume += m.volume;
       }
@@ -854,38 +873,26 @@
     return totals;
   }
 
-  // Best value seen on each axis across prior scored workouts — the
-  // self-calibrating yardstick each new session is measured against.
-  function bestEffortMetrics(workouts) {
-    const best = { intensity: 0, muscle: 0, volume: 0 };
-    for (const w of workouts) {
-      const m = w.effortMetrics;
-      if (!m) continue;
-      for (const k of Object.keys(best)) {
-        if (typeof m[k] === "number" && m[k] > best[k]) best[k] = m[k];
-      }
-    }
-    return best;
-  }
-
-  // Normalized 0-100 per-axis breakdown + blended score, capped by session
-  // coverage (see workoutCoverage) so a one-exercise session can't read as
-  // near-total effort no matter how heavy it was.
-  function scoreEffort(metrics, priorBest, coverage) {
-    const norm = (k) => {
-      if (!(metrics[k] > 0)) return 0;
-      if (!(priorBest[k] > 0)) return 1;
-      return Math.min(1, metrics[k] / priorBest[k]);
-    };
+  // 0-100 per-axis breakdown + blended score. Each axis is scored against
+  // a fixed, published reference band (see the model comment above) —
+  // not against this person's own history — then capped by session
+  // coverage (see workoutCoverage) so a one-exercise session can't read
+  // as near-total effort no matter how heavy it was.
+  function scoreEffort(metrics, coverage) {
+    const intensityScore = Math.max(0, Math.min(100,
+      ((metrics.topRpe - INTENSITY_RPE_FLOOR) / (INTENSITY_RPE_CEIL - INTENSITY_RPE_FLOOR)) * 100
+    ));
+    const muscleScore = Math.max(0, Math.min(100, (metrics.muscle / MUSCLE_FULL_SESSION_REPS) * 100));
+    const volumeScore = Math.max(0, Math.min(100, (metrics.volume / VOLUME_FULL_SESSION_INOL) * 100));
     const breakdown = {
-      intensity: Math.round(norm("intensity") * 100),
-      muscle: Math.round(norm("muscle") * 100),
-      volume: Math.round(norm("volume") * 100),
+      intensity: Math.round(intensityScore),
+      muscle: Math.round(muscleScore),
+      volume: Math.round(volumeScore),
     };
     const blended =
-      EFFORT_WEIGHTS.intensity * norm("intensity") +
-      EFFORT_WEIGHTS.muscle * norm("muscle") +
-      EFFORT_WEIGHTS.volume * norm("volume");
+      EFFORT_WEIGHTS.intensity * (intensityScore / 100) +
+      EFFORT_WEIGHTS.muscle * (muscleScore / 100) +
+      EFFORT_WEIGHTS.volume * (volumeScore / 100);
     const score = Math.min(Math.round(blended * 100), Math.round(coverage * 100));
     return { score, breakdown };
   }
@@ -927,34 +934,29 @@
   // Bump this whenever the effort formula changes meaningfully, so
   // existing history gets recomputed under the new rules instead of
   // being stuck with scores from an old formula (see backfillEffortScores).
-  const EFFORT_SCORE_VERSION = 4;
+  const EFFORT_SCORE_VERSION = 5;
 
   // One-time-per-version migration: (re)computes effort metrics/scores for
   // any workout that either predates this feature or was scored under an
   // older formula version, so history isn't left blank or inconsistent
   // with how new workouts get scored. Walked chronologically (oldest
-  // first) so each workout's score is only ever judged against what had
-  // actually happened by that point in time.
+  // first) so each workout's e1RM references only ever reflect what had
+  // actually happened by that point in time — scoring itself (v5) no
+  // longer depends on other workouts, just this session's own numbers.
   async function backfillEffortScores() {
     if (state.workouts.length === 0) return;
     if (state.workouts.every((w) => w.effortVersion === EFFORT_SCORE_VERSION)) return;
     const chron = [...state.workouts].sort((a, b) => new Date(a.date) - new Date(b.date));
     const bestE1rmSoFar = {};
-    const bestSoFar = { intensity: 0, muscle: 0, volume: 0 };
     for (const w of chron) {
       if (w.effortVersion !== EFFORT_SCORE_VERSION) {
         const metrics = workoutEffortMetrics(w.exercises, (id) => bestE1rmSoFar[id] || 0);
-        const { score, breakdown } = scoreEffort(metrics, bestSoFar, workoutCoverage(w.exercises));
+        const { score, breakdown } = scoreEffort(metrics, workoutCoverage(w.exercises));
         w.effortMetrics = metrics;
         w.effortBreakdown = breakdown;
         w.effortScore = score;
         w.effortVersion = EFFORT_SCORE_VERSION;
         await DB.put("workouts", w);
-      }
-      if (w.effortMetrics) {
-        for (const k of Object.keys(bestSoFar)) {
-          if (w.effortMetrics[k] > bestSoFar[k]) bestSoFar[k] = w.effortMetrics[k];
-        }
       }
       for (const e of w.exercises) {
         for (const s of e.sets) {
@@ -1011,11 +1013,11 @@
     }
 
     // Effort score must be computed while state.workouts still only holds
-    // *prior* workouts (bestE1rmAllTime / bestEffortMetrics both scan it),
+    // *prior* workouts (bestE1rmAllTime scans it for the %1RM reference),
     // so this has to happen before the unshift below.
     const effortMetrics = workoutEffortMetrics(cleanExercises, (id) => bestE1rmAllTime(id));
     const { score: effortScore, breakdown: effortBreakdown } =
-      scoreEffort(effortMetrics, bestEffortMetrics(state.workouts), workoutCoverage(cleanExercises));
+      scoreEffort(effortMetrics, workoutCoverage(cleanExercises));
 
     const record = {
       id: w.id,
@@ -1986,7 +1988,7 @@
   function renderEffortBreakdown(b) {
     if (!b) return "";
     const rows = [
-      { label: "Intensity", sub: "CNS · %1RM", value: b.intensity },
+      { label: "Intensity", sub: "top-set RPE", value: b.intensity },
       { label: "Muscle", sub: "effective reps", value: b.muscle },
       { label: "Work", sub: "volume · INOL", value: b.volume },
     ];
