@@ -1959,7 +1959,7 @@
           <circle cx="60" cy="60" r="${r}" class="effort-ring-progress" stroke-dasharray="${c.toFixed(2)}" stroke-dashoffset="${c.toFixed(2)}" />
         </svg>
         <div class="effort-ring-center">
-          <div class="effort-ring-value">${score}<span class="effort-ring-pct">%</span></div>
+          <div class="effort-ring-value"><span class="effort-ring-num">0</span><span class="effort-ring-pct">%</span></div>
           <div class="effort-ring-label">Effort</div>
         </div>
       </div>
@@ -1995,6 +1995,7 @@
     if (!container) return;
     const score = Math.max(0, Math.min(100, parseFloat(container.dataset.score) || 0));
     const circle = container.querySelector(".effort-ring-progress");
+    const numEl = container.querySelector(".effort-ring-num");
     const r = 52, c = 2 * Math.PI * r;
     const target = c * (1 - score / 100);
     void container.getBoundingClientRect();
@@ -2002,6 +2003,20 @@
       circle.style.transition = "stroke-dashoffset 0.9s cubic-bezier(0.65, 0, 0.35, 1)";
       circle.style.strokeDashoffset = `${target}`;
     });
+    // Count the number up in step with the ring fill (~0.9s), respecting
+    // reduced-motion by jumping straight to the final value.
+    if (numEl) {
+      const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (reduce || score === 0) { numEl.textContent = String(score); return; }
+      const start = performance.now(), dur = 900;
+      const step = (now) => {
+        const t = Math.min(1, (now - start) / dur);
+        const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic, matches the ring
+        numEl.textContent = String(Math.round(eased * score));
+        if (t < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
   }
 
   function renderWorkoutDetail(params) {
@@ -2200,6 +2215,12 @@
           if (!s.isWarmup && state.settings.restTimerEnabled) startRestTimer();
         }
         saveActiveWorkout(); render();
+        // One-shot completion pop on just the tapped check (re-query after
+        // render, since render() rebuilt the DOM).
+        if (s.completed) {
+          const btn = document.querySelector(`.set-check[data-exidx="${exIdx}"][data-setidx="${setIdx}"]`);
+          if (btn) { btn.classList.add("set-pop"); setTimeout(() => btn.classList.remove("set-pop"), 460); }
+        }
         break;
       }
       case "set-type-menu":

@@ -140,12 +140,22 @@ button:active:not(:disabled),
 }
 #app::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
-#app.app-enter {
-  animation: appEnter 0.22s cubic-bezier(0.22, 1, 0.36, 1);
-}
+/* On navigation the whole view fades in, and its top-level blocks rise in a
+   gentle stagger — a premium, composed entrance rather than one flat pop. */
+#app.app-enter { animation: appFade 0.2s ease both; }
+@keyframes appFade { from { opacity: 0; } to { opacity: 1; } }
 
-@keyframes appEnter {
-  from { opacity: 0; transform: translateY(6px); }
+#app.app-enter > * { animation: riseIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+#app.app-enter > *:nth-child(1) { animation-delay: 0.02s; }
+#app.app-enter > *:nth-child(2) { animation-delay: 0.06s; }
+#app.app-enter > *:nth-child(3) { animation-delay: 0.10s; }
+#app.app-enter > *:nth-child(4) { animation-delay: 0.14s; }
+#app.app-enter > *:nth-child(5) { animation-delay: 0.18s; }
+#app.app-enter > *:nth-child(6) { animation-delay: 0.21s; }
+#app.app-enter > *:nth-child(7) { animation-delay: 0.24s; }
+#app.app-enter > *:nth-child(n+8) { animation-delay: 0.27s; }
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(11px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -212,17 +222,20 @@ h3 { font-size: var(--fs-xs); font-weight: var(--fw-bold); margin: 0 0 8px; colo
 .btn:active { background: var(--surface-2); }
 
 .btn-primary {
-  background: var(--text);
+  background: linear-gradient(180deg, #2c2b28, var(--text));
   color: var(--bg);
   border-color: var(--text);
+  box-shadow: 0 1px 2px rgba(28, 27, 26, 0.14), 0 5px 14px rgba(28, 27, 26, 0.10);
 }
-.btn-primary:active { opacity: 0.85; background: var(--text); }
+.btn-primary:active { opacity: 0.9; box-shadow: 0 1px 2px rgba(28, 27, 26, 0.14); }
 
 .btn-accent {
-  background: var(--accent);
+  background: linear-gradient(180deg, #2a8497, var(--accent));
   color: #fff;
   border-color: var(--accent);
+  box-shadow: 0 1px 2px rgba(35, 114, 134, 0.18), 0 5px 14px rgba(35, 114, 134, 0.22);
 }
+.btn-accent:active { box-shadow: 0 1px 2px rgba(35, 114, 134, 0.18); }
 
 .btn-danger {
   background: var(--danger-bg);
@@ -558,7 +571,7 @@ input:focus, select:focus, textarea:focus {
   background: rgba(28, 27, 26, 0);
   transition: background 0.18s ease;
 }
-.confirm-overlay.open { background: rgba(28, 27, 26, 0.4); }
+.confirm-overlay.open { background: rgba(28, 27, 26, 0.4); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
 .confirm-overlay.hidden { display: none; }
 .confirm-card {
   width: 100%;
@@ -1261,3 +1274,96 @@ input:focus, select:focus, textarea:focus {
 .icon-btn-trash { color: var(--text-3); padding: 6px; }
 .icon-btn-trash svg { width: 17px; height: 17px; }
 .icon-btn-trash:active { color: var(--danger); background: var(--danger-bg); }
+
+/* ============================================================
+   v5.1 — premium & subtle motion + aesthetic polish
+   ============================================================ */
+
+/* Softer, warmer page backdrop — a barely-there radial lift at the top. */
+body {
+  background: radial-gradient(130% 70% at 50% -10%, #fdfcfa 0%, var(--bg) 60%);
+  background-attachment: fixed;
+}
+
+/* Progress bars grow in on mount instead of appearing pre-filled. */
+.muscle-vol-fill,
+.effort-axis-fill {
+  transform-origin: left center;
+  animation: growX 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes growX { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* One-shot pop when a set is marked complete (added via JS to the tapped
+   check only, so it never replays on unrelated re-renders). */
+.set-check.set-pop { animation: setPop 0.42s cubic-bezier(0.34, 1.6, 0.5, 1); }
+@keyframes setPop {
+  0% { transform: scale(1); }
+  35% { transform: scale(1.32); }
+  100% { transform: scale(1); }
+}
+/* A soft accent ripple behind the check as it lands. */
+.set-check.set-pop::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  opacity: 0.5;
+  animation: setRipple 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.set-check { position: relative; }
+@keyframes setRipple {
+  from { transform: scale(0.6); opacity: 0.5; }
+  to { transform: scale(1.5); opacity: 0; }
+}
+
+/* Effort ring number counts up (JS drives the value); give it a gentle glow. */
+.effort-ring-progress { filter: drop-shadow(0 2px 6px rgba(35, 114, 134, 0.28)); }
+
+/* Cards get a touch more depth and lift on press. */
+.card { transition: box-shadow 0.2s ease, transform 0.12s ease; }
+.card-tap:active { box-shadow: var(--shadow-sm); }
+
+/* Segmented control: active segment gains subtle depth (works across the
+   innerHTML re-renders since it's a static style, not a cross-state tween). */
+.segmented button.active {
+  box-shadow: 0 1px 2px rgba(28, 27, 26, 0.10), 0 2px 6px rgba(28, 27, 26, 0.06);
+}
+
+/* Inputs: a soft accent focus ring instead of the default outline. */
+input:focus, textarea:focus, .set-input:focus {
+  outline: none;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(35, 114, 134, 0.12);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+/* Effort/PR badges get a subtle gradient sheen. */
+.badge-effort { background: linear-gradient(180deg, #eef6f7, var(--accent-bg)); }
+.badge-success { background: linear-gradient(180deg, #e8f8f1, var(--success-bg)); }
+
+/* Rest timer slides up when it appears. */
+.rest-timer-bar:not(.hidden) { animation: sheetUp 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes sheetUp {
+  from { transform: translateY(130%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Calendar day cells settle in with a soft scale as the month renders. */
+.cal-cell:not(.cal-empty) { animation: cellIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@keyframes cellIn { from { opacity: 0; transform: scale(0.85); } to { opacity: 1; transform: scale(1); } }
+
+/* Suggestion + superset accents fade/slide in a hair after their card. */
+.suggest-card { animation: riseIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) 0.1s both; }
+
+/* Respect reduced-motion: keep everything, just make it near-instant. */
+@media (prefers-reduced-motion: reduce) {
+  *, #app.app-enter, #app.app-enter > *,
+  .muscle-vol-fill, .effort-axis-fill, .cal-cell:not(.cal-empty),
+  .set-check.set-pop, .rest-timer-bar:not(.hidden), .suggest-card {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .set-check.set-pop::after { display: none; }
+}
