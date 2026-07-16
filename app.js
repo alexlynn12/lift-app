@@ -5,11 +5,28 @@
 
   // ---------- Global state ----------
   const state = {
-    settings: { unitMode: "both", activeUnit: "lb", hapticsEnabled: true, bodyWeightLb: null, heightIn: null },
+    settings: {
+      unitMode: "both", activeUnit: "lb", hapticsEnabled: true, bodyWeightLb: null, heightIn: null,
+      // Plate calculator: bar weight + the plates (per side, one of each pair)
+      // available in the gym, largest first. Stored in lb (canonical unit).
+      barWeightLb: 45,
+      platesLb: [45, 35, 25, 10, 5, 2.5],
+      // Optional per-set RPE column (off by default, like Strong/Hevy).
+      showRpe: false,
+      // Optional rest timer between sets (off by default — deliberately, so
+      // the minimalist flow is unchanged unless the person opts in).
+      restTimerEnabled: false,
+      restTimerSec: 120,
+      // Dated bodyweight log [{date, lb}] powering the trend chart and the
+      // bodyweight-exercise effort scoring. bodyWeightLb mirrors the latest.
+      bodyWeightLog: [],
+    },
     customExercises: [],
     routines: [],
     workouts: [],
-    activeWorkout: null, // { id, name, startedAt, exercises: [{exerciseId, name, sets:[{weight,reps,completed,isWarmup}]}] }
+    // Set shape: {weight, reps, completed, isWarmup?, rpe?, type?}  type ∈ "drop"|"failure"
+    // Exercise shape may carry supersetId to group it with adjacent exercises.
+    activeWorkout: null,
   };
 
 
@@ -80,6 +97,11 @@
     exerciseMenuContext = context;
     exerciseMenuActionsEl.classList.remove("hidden");
     menuNoteFormEl.classList.add("hidden");
+    // Superset + warm-up ramp only apply to an in-progress workout, not a
+    // routine template.
+    exerciseMenuOverlayEl.querySelectorAll(".menu-item-workout-only").forEach((el) => {
+      el.style.display = context === "workout" ? "" : "none";
+    });
     exerciseMenuOverlayEl.classList.remove("hidden");
     requestAnimationFrame(() => exerciseMenuOverlayEl.classList.add("open"));
   }
@@ -112,6 +134,14 @@
       persist();
       closeExerciseMenu();
       render();
+    } else if (t.dataset.action === "menu-add-ramp") {
+      const idx = exerciseMenuIndex;
+      closeExerciseMenu();
+      addWarmupRamp(idx);
+    } else if (t.dataset.action === "menu-superset") {
+      const idx = exerciseMenuIndex;
+      closeExerciseMenu();
+      toggleSupersetWithNext(idx);
     }
   });
 
@@ -231,6 +261,12 @@
     // install — like bodyWeightLb — still get their default instead of
     // coming back undefined for existing saved settings blobs.
     if (settings) state.settings = { ...state.settings, ...settings };
+    // Migrate the old single static bodyweight into the dated log so existing
+    // installs get a first data point instead of an empty trend.
+    if (!Array.isArray(state.settings.bodyWeightLog)) state.settings.bodyWeightLog = [];
+    if (state.settings.bodyWeightLog.length === 0 && state.settings.bodyWeightLb) {
+      state.settings.bodyWeightLog = [{ date: new Date().toISOString(), lb: state.settings.bodyWeightLb }];
+    }
     state.customExercises = customExercises || [];
     state.routines = routines || [];
     await seedProgram();
@@ -470,6 +506,148 @@
     return weightLb * (1 + reps / 30);
   }
 
+  // ===== Plate calculator =====
+  // Given a target total barbell weight (lb), returns the plates to load on
+  // ONE side, largest-first, using the plate denominations available in
+  // Settings. Greedy from largest plate down — always optimal for a real,
+  // decreasing plate set. Returns { perSide:[..], leftover, achievable }.
+  function computePlates(totalLb) {
+    const bar = state.settings.barWeightLb || 45;
+    const plates = (state.settings.platesLb || []).slice().sort((a, b) => b - a);
+    if (totalLb == null || totalLb < bar) return { perSide: [], leftover: 0, achievable: totalLb === bar };
+    let perSideWeight = (totalLb - bar) / 2;
+    const perSide = [];
+    for (const p of plates) {
+      while (perSideWeight >= p - 1e-6) { perSide.push(p); perSideWeight -= p; }
+    }
+    const leftover = Math.round(perSideWeight * 100) / 100;
+    return { perSide, leftover, achievable: leftover < 1e-6 };
+  }
+
+  // ===== Warm-up ramp =====
+  // Builds a set of warmup sets ramping to a top working weight. Standard
+  // powerlifting ramp: bar, then ~40/55/70/85% of the top set, reps
+  // descending as load climbs. Each percentage is rounded to the smallest
+  // loadable increment (2× the smallest available plate).
+  function warmupRamp(topWeightLb) {
+    const bar = state.settings.barWeightLb || 45;
+    if (!(topWeightLb > bar)) return [];
+    const smallest = Math.min(...(state.settings.platesLb || [2.5]));
+    const step = smallest * 2; // both sides
+    const roundTo = (w) => Math.max(bar, Math.round(w / step) * step);
+    const plan = [
+      { pct: 0, reps: 8, weight: bar },
+      { pct: 0.4, reps: 5 },
+      { pct: 0.6, reps: 3 },
+      { pct: 0.8, reps: 2 },
+    ];
+    const seen = new Set();
+    const out = [];
+    for (const p of plan) {
+      const w = p.weight != null ? p.weight : roundTo(topWeightLb * p.pct);
+      if (w >= topWeightLb) continue;      // never "warm up" at/above the work weight
+      if (seen.has(w)) continue;            // skip duplicates after rounding
+      seen.add(w);
+      out.push({ weight: w, reps: p.reps, isWarmup: true, completed: false });
+    }
+    return out;
+  }
+
+  // ===== Weekly muscle-group volume =====
+  // Hard working sets per muscle group over the last `days` days — the
+  // hypertrophy community's core "are you training everything enough?"
+  // signal, and a direct read on the effort model's Muscle axis.
+  function weeklyMuscleVolume(days = 7) {
+    const cutoff = Date.now() - days * 86400000;
+    const counts = {};
+    for (const w of state.workouts) {
+      if (new Date(w.date).getTime() < cutoff) continue;
+      for (const e of w.exercises) {
+        const ex = exerciseById(e.exerciseId);
+        if (!ex) continue;
+        const working = e.sets.filter((s) => s.completed && !s.isWarmup).length;
+        if (working) counts[ex.muscle] = (counts[ex.muscle] || 0) + working;
+      }
+    }
+    return Object.entries(counts).map(([muscle, sets]) => ({ muscle, sets }))
+      .sort((a, b) => b.sets - a.sets);
+  }
+
+  // ===== Training calendar / streak / frequency =====
+  // Set of YYYY-MM-DD strings on which at least one workout was logged.
+  function workoutDaySet() {
+    const set = new Set();
+    for (const w of state.workouts) set.add(new Date(w.date).toISOString().slice(0, 10));
+    return set;
+  }
+
+  // Current streak = consecutive weeks (Mon–Sun) with ≥1 workout, counting
+  // back from this week. This week doesn't break the streak until it ends.
+  function weekStreak() {
+    if (state.workouts.length === 0) return 0;
+    const weekKey = (d) => {
+      const dt = new Date(d);
+      const day = (dt.getDay() + 6) % 7; // Mon=0
+      dt.setDate(dt.getDate() - day); dt.setHours(0, 0, 0, 0);
+      return dt.getTime();
+    };
+    const weeks = new Set(state.workouts.map((w) => weekKey(w.date)));
+    const WEEK = 7 * 86400000;
+    let cursor = weekKey(Date.now());
+    let streak = 0;
+    if (!weeks.has(cursor)) cursor -= WEEK; // allow an as-yet-empty current week
+    while (weeks.has(cursor)) { streak++; cursor -= WEEK; }
+    return streak;
+  }
+
+  function workoutsThisWeek() {
+    const now = new Date();
+    const day = (now.getDay() + 6) % 7;
+    const monday = new Date(now); monday.setDate(now.getDate() - day); monday.setHours(0, 0, 0, 0);
+    return state.workouts.filter((w) => new Date(w.date) >= monday).length;
+  }
+
+  // ===== Auto-progression suggestion =====
+  // Looks at the most recent session for an exercise. If the top working set
+  // was completed at RPE ≤ 8 (or, with no RPE logged, hit ≥ the app's rep
+  // target of 5), suggest a small load bump for next time; otherwise suggest
+  // repeating the weight. Increment = 2× smallest plate (min loadable jump),
+  // ×2 again for lower-body compounds which progress faster.
+  function progressionSuggestion(exerciseId) {
+    const found = lastCompletedWorkoutFor(exerciseId);
+    if (!found) return null;
+    const working = found.exercise.sets.filter((s) => s.completed && !s.isWarmup);
+    if (!working.length) return null;
+    const top = working.reduce((a, b) => ((b.weight || 0) > (a.weight || 0) ? b : a));
+    if (!(top.weight > 0)) return null;
+    const ex = exerciseById(exerciseId);
+    const smallest = Math.min(...(state.settings.platesLb || [2.5]));
+    let step = smallest * 2;
+    if (ex && (ex.muscle === "Legs" || ex.muscle === "Back") && ex.equipment === "Barbell") step *= 2;
+    const easy = (typeof top.rpe === "number" ? top.rpe <= 8 : (top.reps || 0) >= 5) && top.type !== "failure";
+    const next = easy ? Math.round((top.weight + step) / smallest) * smallest : top.weight;
+    return { last: top.weight, next, bumped: next > top.weight, reps: top.reps };
+  }
+
+  // ===== Bodyweight log =====
+  function currentBodyWeightLb() {
+    const log = state.settings.bodyWeightLog || [];
+    if (log.length) return log[log.length - 1].lb;
+    return state.settings.bodyWeightLb || null;
+  }
+
+  function logBodyWeight(lb) {
+    if (!(lb > 0)) return;
+    const log = state.settings.bodyWeightLog || (state.settings.bodyWeightLog = []);
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = log.find((e) => e.date.slice(0, 10) === today);
+    if (existing) existing.lb = lb;
+    else log.push({ date: new Date().toISOString(), lb });
+    log.sort((a, b) => new Date(a.date) - new Date(b.date));
+    state.settings.bodyWeightLb = log[log.length - 1].lb; // keep mirror in sync
+    saveSettings();
+  }
+
   // ---------- Effort scoring ----------
   // Every completed workout gets a 0-100 "effort score" built from hard
   // sets: each working set contributes based mostly on how close it was to
@@ -569,7 +747,7 @@
   function effectiveLoad(set, ex) {
     const weight = set.weight || 0;
     if (ex && ex.equipment === "Bodyweight") {
-      return weight + (state.settings.bodyWeightLb || DEFAULT_BODYWEIGHT_LB);
+      return weight + (currentBodyWeightLb() || DEFAULT_BODYWEIGHT_LB);
     }
     return weight;
   }
@@ -633,6 +811,12 @@
       const maxReps = 30 * (bestE1rm / load - 1);
       rir = Math.max(0, maxReps - reps);
     }
+    // A logged RPE is ground truth for how close to failure the set was, so
+    // it overrides the load-vs-e1RM estimate: RIR ≈ 10 − RPE. A set marked
+    // "to failure" is RIR 0. This makes the Muscle (effective-reps) axis
+    // reflect what actually happened rather than a model guess.
+    if (set.type === "failure") rir = 0;
+    else if (typeof set.rpe === "number" && set.rpe > 0) rir = Math.max(0, 10 - set.rpe);
     return {
       intensity: Math.pow(pct, 4) * diff,
       muscle: Math.max(0, Math.min(reps, 5 - rir)) * diff,
@@ -842,6 +1026,7 @@
     state.workouts.unshift(record);
     state.activeWorkout = null;
     stopWorkoutClock();
+    endRestTimer(false);
     await DB.kvSet("activeWorkout", null);
     navigate("workout-complete", { id: record.id });
   }
@@ -849,6 +1034,7 @@
   function discardWorkout() {
     state.activeWorkout = null;
     stopWorkoutClock();
+    endRestTimer(false);
     DB.kvSet("activeWorkout", null);
     navigate("home");
   }
@@ -929,10 +1115,40 @@
     `;
   }
 
+  // This-week training summary: streak, sessions this week, and hard sets per
+  // muscle group over the last 7 days (a direct read on the effort Muscle axis).
+  function renderWeeklySummarySection() {
+    const vol = weeklyMuscleVolume(7);
+    const streak = weekStreak();
+    const thisWeek = workoutsThisWeek();
+    if (vol.length === 0 && streak === 0) return "";
+    const maxSets = Math.max(1, ...vol.map((v) => v.sets));
+    return `
+      <div class="section">
+        <div class="row" style="margin-bottom:8px;">
+          <h3 style="margin:0;">This week</h3>
+          <span class="small muted">${thisWeek} session${thisWeek === 1 ? "" : "s"}${streak > 1 ? ` · ${streak}-week streak 🔥` : ""}</span>
+        </div>
+        ${vol.length ? `
+          <div class="card">
+            ${vol.map((v) => `
+              <div class="muscle-vol-row">
+                <span class="muscle-vol-name">${escapeHtml(v.muscle)}</span>
+                <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.round(100 * v.sets / maxSets)}%"></span></span>
+                <span class="muscle-vol-count">${v.sets}</span>
+              </div>
+            `).join("")}
+            <div class="tiny muted" style="margin-top:8px;">Hard working sets per muscle group, last 7 days.</div>
+          </div>
+        ` : `<div class="card"><span class="small muted">No sets logged this week yet.</span></div>`}
+      </div>
+    `;
+  }
+
   function renderHome() {
     const last = state.workouts[0];
     appEl.innerHTML = `
-      <div class="topbar"><h1>Workouts</h1></div>
+      <div class="topbar"><h1>Home</h1></div>
 
       ${state.activeWorkout ? `
         <div class="card card-tap" data-action="resume-workout" style="border-color:var(--accent); background:var(--accent-bg);">
@@ -971,6 +1187,8 @@
 
       ${renderHomeProgressSection()}
 
+      ${renderWeeklySummarySection()}
+
       ${last ? `
         <div class="section">
           <h3>Last workout</h3>
@@ -1006,10 +1224,15 @@
       <div class="segmented" style="margin-bottom:16px;">
         <button data-action="history-tab" data-tab="workouts" class="${tab === "workouts" ? "active" : ""}">Workouts</button>
         <button data-action="history-tab" data-tab="exercises" class="${tab === "exercises" ? "active" : ""}">Exercises</button>
+        <button data-action="history-tab" data-tab="calendar" class="${tab === "calendar" ? "active" : ""}">Calendar</button>
       </div>
       <div id="history-body"></div>
     `;
     const body = document.getElementById("history-body");
+    if (tab === "calendar") {
+      renderCalendarInto(body);
+      return;
+    }
     if (tab === "workouts") {
       if (state.workouts.length === 0) {
         body.innerHTML = emptyStateHtml("No workouts logged", "Finish a workout and it'll show up here.", "workouts");
@@ -1025,7 +1248,7 @@
             <div class="row-gap">
               ${typeof w.effortScore === "number" ? `<span class="badge badge-effort">${w.effortScore}% effort</span>` : ""}
               ${w.prCount ? `<span class="badge badge-success">${w.prCount} PR${w.prCount > 1 ? "s" : ""}</span>` : ""}
-              <button class="icon-btn icon-btn-danger" data-action="delete-workout" data-id="${w.id}" aria-label="Delete workout">Delete</button>
+              <button class="icon-btn icon-btn-trash" data-action="delete-workout" data-id="${w.id}" aria-label="Delete workout">${ICONS.trash}</button>
             </div>
           </div>
         </div>
@@ -1048,6 +1271,41 @@
         </div>
       `).join("");
     }
+  }
+
+  // Which month the History calendar shows: 0 = current, negative = past.
+  let calendarMonthOffset = 0;
+
+  function renderCalendarInto(body) {
+    const days = workoutDaySet();
+    const base = new Date(); base.setDate(1); base.setMonth(base.getMonth() + calendarMonthOffset);
+    const year = base.getFullYear(), month = base.getMonth();
+    const monthName = base.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+    const firstDow = (new Date(year, month, 1).getDay() + 6) % 7; // Mon=0
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let cells = "";
+    for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell cal-empty"></div>`;
+    let monthCount = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const ds = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const has = days.has(ds); if (has) monthCount++;
+      cells += `<div class="cal-cell ${has ? "cal-active" : ""} ${ds === todayStr ? "cal-today" : ""}"><span>${d}</span></div>`;
+    }
+    const dow = ["M", "T", "W", "T", "F", "S", "S"].map((d) => `<div class="cal-dow">${d}</div>`).join("");
+    body.innerHTML = `
+      <div class="cal-stats">
+        <div class="stat-card"><div class="stat-label">Streak</div><div class="stat-value">${weekStreak()} wk</div></div>
+        <div class="stat-card"><div class="stat-label">This week</div><div class="stat-value">${workoutsThisWeek()}</div></div>
+        <div class="stat-card"><div class="stat-label">This month</div><div class="stat-value">${monthCount}</div></div>
+      </div>
+      <div class="cal-head">
+        <button class="cal-nav" data-action="cal-prev" aria-label="Previous month">‹</button>
+        <span class="cal-month">${monthName}</span>
+        <button class="cal-nav" data-action="cal-next" ${calendarMonthOffset >= 0 ? "disabled" : ""} aria-label="Next month">›</button>
+      </div>
+      <div class="cal-grid">${dow}${cells}</div>
+    `;
   }
 
   function renderExercises(params) {
@@ -1124,6 +1382,13 @@
             <div class="stat-value">${Math.round(weightToDisplay(bestE1rm))} ${unitLabel()}</div>
           </div>
         </div>
+        ${(() => {
+          const sg = progressionSuggestion(ex.id);
+          if (!sg) return "";
+          return sg.bumped
+            ? `<div class="suggest-card"><span class="suggest-icon">▲</span><div><div class="suggest-title">Try ${weightToDisplay(sg.next)} ${unitLabel()} next</div><div class="tiny muted">Last set ${weightToDisplay(sg.last)} ${unitLabel()} × ${sg.reps} looked manageable — small jump up.</div></div></div>`
+            : `<div class="suggest-card suggest-hold"><span class="suggest-icon">→</span><div><div class="suggest-title">Repeat ${weightToDisplay(sg.last)} ${unitLabel()}</div><div class="tiny muted">Groove ${weightToDisplay(sg.last)} ${unitLabel()} again before adding load.</div></div></div>`;
+        })()}
         <div class="chart-wrap">${renderLineChart(chartData, { label: "Weight progress over recent sessions" })}</div>
       ` : emptyStateHtml("No history yet", "Log this exercise in a workout to see progress.", "history")}
 
@@ -1316,8 +1581,12 @@
     svg.addEventListener("pointercancel", hideCursor);
   }
 
+  // Plate denominations offered as toggles in Settings (lb).
+  const PLATE_OPTIONS_LB = [55, 45, 35, 25, 15, 10, 5, 2.5, 1.25];
+
   function renderSettings() {
     const s = state.settings;
+    const bwData = (s.bodyWeightLog || []).slice(-12).map((e) => ({ date: e.date, value: displayUnit() === "kg" ? lbToKg(e.lb) : e.lb }));
     appEl.innerHTML = `
       <div class="topbar"><h1>Settings</h1></div>
 
@@ -1350,12 +1619,13 @@
             <span>Your body weight</span>
             <div class="row-gap">
               <input type="text" inputmode="decimal" id="bodyweight-input" data-action="set-bodyweight"
-                value="${s.bodyWeightLb ? weightToDisplay(s.bodyWeightLb) : ""}" placeholder="${DEFAULT_BODYWEIGHT_LB}"
+                value="${currentBodyWeightLb() ? weightToDisplay(currentBodyWeightLb()) : ""}" placeholder="${DEFAULT_BODYWEIGHT_LB}"
                 style="width:64px; text-align:right; font-weight:700; border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface);" />
               <span class="muted small">${unitLabel()}</span>
             </div>
           </div>
-          <div class="tiny muted" style="margin-top:8px; margin-bottom:12px;">Used to score bodyweight exercises (push-ups, pull-ups, planks) in your effort score. Without this we assume ${DEFAULT_BODYWEIGHT_LB} lb.</div>
+          <div class="tiny muted" style="margin-top:8px; margin-bottom:${bwData.length >= 2 ? "12px" : "12px"};">Updating this logs a dated entry so you can track your weight over time. Also scores bodyweight exercises (push-ups, pull-ups, planks). Without it we assume ${DEFAULT_BODYWEIGHT_LB} lb.</div>
+          ${bwData.length >= 2 ? `<div class="chart-wrap" style="margin-bottom:12px;">${renderLineChart(bwData, { label: "Body weight over recent entries" })}</div>` : ""}
           <div class="row" style="border-top:1px solid var(--border); padding-top:12px;">
             <span>Your height</span>
             <div class="row-gap">
@@ -1369,6 +1639,54 @@
         </div>
       </div>
 
+      <div class="section">
+        <h3>Workout</h3>
+        <div class="card">
+          <div class="row">
+            <span>Log RPE per set</span>
+            <div class="segmented" style="width:120px;">
+              <button data-action="set-rpe-visible" data-value="on" class="${s.showRpe ? "active" : ""}">On</button>
+              <button data-action="set-rpe-visible" data-value="off" class="${s.showRpe ? "" : "active"}">Off</button>
+            </div>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">Adds an RPE column (5–10) to each set. Logged RPE also sharpens your effort score's Muscle axis instead of estimating from the bar weight.</div>
+          <div class="row" style="border-top:1px solid var(--border); padding-top:12px;">
+            <span>Rest timer</span>
+            <div class="segmented" style="width:120px;">
+              <button data-action="set-rest-enabled" data-value="on" class="${s.restTimerEnabled ? "active" : ""}">On</button>
+              <button data-action="set-rest-enabled" data-value="off" class="${s.restTimerEnabled ? "" : "active"}">Off</button>
+            </div>
+          </div>
+          ${s.restTimerEnabled ? `
+            <div class="row" style="margin-top:12px;">
+              <span class="small muted">Length</span>
+              <div class="segmented" style="width:220px;">
+                ${[60, 90, 120, 180].map((sec) => `<button data-action="set-rest-sec" data-sec="${sec}" class="${(s.restTimerSec || 120) === sec ? "active" : ""}">${sec < 120 ? sec + "s" : (sec / 60) + "m"}</button>`).join("")}
+              </div>
+            </div>` : ""}
+          <div class="tiny muted" style="margin-top:8px;">Off by default. When on, a countdown starts automatically after you complete a working set.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Plate calculator</h3>
+        <div class="card">
+          <div class="row">
+            <span>Barbell weight</span>
+            <div class="row-gap">
+              <input type="text" inputmode="decimal" id="bar-weight-input" data-action="set-bar-weight"
+                value="${weightToDisplay(s.barWeightLb || 45)}"
+                style="width:64px; text-align:right; font-weight:700; border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface);" />
+              <span class="muted small">${unitLabel()}</span>
+            </div>
+          </div>
+          <div class="tiny muted" style="margin-top:10px; margin-bottom:8px;">Available plates (per side):</div>
+          <div class="plate-chip-row">
+            ${PLATE_OPTIONS_LB.map((p) => `<button class="chip ${(s.platesLb || []).includes(p) ? "chip-selected" : ""}" data-action="toggle-plate" data-plate="${p}">${weightToDisplay(p)}</button>`).join("")}
+          </div>
+          <div class="tiny muted" style="margin-top:10px;">Tap the barbell icon on any exercise during a workout to see the plates to load.</div>
+        </div>
+      </div>
 
       <div class="section">
         <h3>Haptics</h3>
@@ -1387,14 +1705,16 @@
       <div class="section">
         <h3>Data</h3>
         <div class="card">
-          <button class="btn" data-action="export-data" style="margin-bottom:8px;">Export backup</button>
+          <button class="btn" data-action="export-data" style="margin-bottom:8px;">Export backup (JSON)</button>
+          <button class="btn" data-action="export-csv" style="margin-bottom:8px;">Export sets (CSV)</button>
           <button class="btn" data-action="import-data" style="margin-bottom:8px;">Restore from backup</button>
           <input type="file" id="import-file-input" data-action="import-file" accept="application/json,.json" style="display:none;" />
           <button class="btn btn-danger" data-action="reset-data">Erase all data</button>
-          <div class="tiny muted" style="margin-top:8px;">Your workouts live only on this device's browser storage — they're never uploaded anywhere, including the app's GitHub repo. Export a backup periodically (or before switching phones/browsers) so you always have a copy you control.</div>
+          <div class="tiny muted" style="margin-top:8px;">Your workouts live only on this device's browser storage — they're never uploaded anywhere, including the app's GitHub repo. Export a backup periodically (or before switching phones/browsers) so you always have a copy you control. CSV opens in any spreadsheet.</div>
         </div>
       </div>
     `;
+    if (bwData.length >= 2) initProgressChart(document.getElementById("progress-chart"), bwData, (v) => `${roundClean(v)} ${unitLabel()}`);
   }
 
   // Migrates a routine exercise to the current shape (an explicit list of
@@ -1483,7 +1803,7 @@
       <input type="text" id="workout-name" class="title-input" value="${escapeHtml(w.name)}" />
 
       <div id="workout-exercises">
-        ${w.exercises.map((ex, exIdx) => renderExerciseBlock(ex, exIdx)).join("")}
+        ${w.exercises.map((ex, exIdx) => renderExerciseBlock(ex, exIdx, supersetInfoFor(w.exercises, exIdx))).join("")}
       </div>
 
       <button class="fab-add" data-action="add-workout-exercise">+ Add exercise</button>
@@ -1520,35 +1840,66 @@
     if (workoutClockInterval) { clearInterval(workoutClockInterval); workoutClockInterval = null; }
   }
 
-  function renderExerciseBlock(ex, exIdx) {
+  // Label + CSS class for a set's number cell based on its type.
+  function setTypeLabel(s, workingNum) {
+    if (s.isWarmup) return { text: "W", cls: "warmup" };
+    if (s.type === "drop") return { text: "D", cls: "dropset" };
+    if (s.type === "failure") return { text: "F", cls: "failure" };
+    return { text: String(workingNum), cls: "" };
+  }
+
+  // Superset membership for the exercise at exIdx: only adjacent exercises
+  // sharing the same supersetId form a group. Returns {letter, first, last}
+  // or null when the exercise isn't in a (multi-member) superset.
+  function supersetInfoFor(exercises, exIdx) {
+    const id = exercises[exIdx] && exercises[exIdx].supersetId;
+    if (!id) return null;
+    // Find the contiguous run of this supersetId around exIdx.
+    let start = exIdx, end = exIdx;
+    while (start > 0 && exercises[start - 1].supersetId === id) start--;
+    while (end < exercises.length - 1 && exercises[end + 1].supersetId === id) end++;
+    if (end === start) return null; // a lone member isn't really a superset
+    const letter = "ABCDEFGH"[exIdx - start] || "•";
+    return { letter, first: exIdx === start, last: exIdx === end };
+  }
+
+  function renderExerciseBlock(ex, exIdx, ssInfo) {
     const u = unitLabel();
+    const showRpe = !!state.settings.showRpe;
     let workingNum = 0;
+    const topWeight = Math.max(0, ...ex.sets.filter((s) => !s.isWarmup).map((s) => s.weight || 0));
+    const sugg = progressionSuggestion(ex.exerciseId);
+    const ssChip = ssInfo ? `<span class="ss-chip">${ssInfo.letter}</span>` : "";
+    const ssClass = ssInfo ? `superset-member ${ssInfo.first ? "superset-first" : ""} ${ssInfo.last ? "superset-last" : ""}` : "";
     return `
-      <div class="exercise-block">
+      <div class="exercise-block ${ssClass}">
         <div class="ex-header">
           <div>
-            <div class="ex-title">${escapeHtml(ex.name)}</div>
+            <div class="ex-title">${ssChip}${escapeHtml(ex.name)}</div>
             ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
+            ${sugg && sugg.bumped ? `<div class="ex-suggest">▲ Suggested: ${weightToDisplay(sugg.next)} ${u} <span class="muted">(last ${weightToDisplay(sugg.last)}×${sugg.reps})</span></div>` : ""}
           </div>
           <div class="ex-header-actions">
+            ${topWeight > 0 ? `<button class="ex-plate-btn" data-action="plate-calc" data-exidx="${exIdx}" aria-label="Plate calculator">${ICONS.barbell}</button>` : ""}
             <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">${ICONS.kebab}</button>
             <button class="icon-btn icon-btn-danger" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
         </div>
         <table class="set-table">
-          <tr><th>Set</th><th>Previous</th><th>${u}</th><th>Reps</th><th></th><th></th></tr>
+          <tr><th>Set</th><th>Previous</th><th>${u}</th><th>Reps</th>${showRpe ? "<th>RPE</th>" : ""}<th></th></tr>
           ${ex.sets.map((s, setIdx) => {
             const isWarmup = !!s.isWarmup;
-            const label = isWarmup ? "W" : (++workingNum);
+            if (!isWarmup) workingNum++;
+            const tl = setTypeLabel(s, workingNum);
             const prevLabel = isWarmup ? "—" : previousSetLabel(ex.exerciseId, workingNum - 1);
             return `
             <tr class="set-row ${s.completed ? "completed" : ""} ${isWarmup ? "warmup" : ""}">
-              <td class="set-num">${label}</td>
+              <td><button class="set-num set-num-btn ${tl.cls}" data-action="set-type-menu" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Set type">${tl.text}</button></td>
               <td class="set-prev">${prevLabel}</td>
               <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
               <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
+              ${showRpe ? `<td><input class="set-input rpe-input" inputmode="decimal" type="number" step="0.5" min="5" max="10" data-action="set-rpe" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.rpe == null ? "" : s.rpe}" placeholder="–" /></td>` : ""}
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">${ICONS.check}</button></td>
-              <td><button class="set-remove-btn" data-action="remove-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Remove set">${ICONS.close}</button></td>
             </tr>
           `; }).join("")}
         </table>
@@ -1662,13 +2013,18 @@
       <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}${typeof w.effortScore === "number" ? ` · ${w.effortScore}% effort` : ""}${w.prCount ? ` · ${w.prCount} PR${w.prCount > 1 ? "s" : ""}` : ""}</div>
       ${w.exercises.map((ex) => {
         let workingNum = 0;
+        const showRpe = ex.sets.some((s) => s.rpe != null);
         return `
         <div class="exercise-block">
           <div class="ex-title">${escapeHtml(ex.name)}</div>
           ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
           <table class="set-table">
-            <tr><th>Set</th><th>${unitLabel()}</th><th>Reps</th></tr>
-            ${ex.sets.map((s) => `<tr class="set-row ${s.isWarmup ? "warmup" : ""}"><td class="set-num">${s.isWarmup ? "W" : ++workingNum}</td><td>${weightToDisplay(s.weight)}</td><td>${s.reps}</td></tr>`).join("")}
+            <tr><th>Set</th><th>${unitLabel()}</th><th>Reps</th>${showRpe ? "<th>RPE</th>" : ""}</tr>
+            ${ex.sets.map((s) => {
+              if (!s.isWarmup) workingNum++;
+              const tl = setTypeLabel(s, workingNum);
+              return `<tr class="set-row ${s.isWarmup ? "warmup" : ""}"><td class="set-num ${tl.cls}">${tl.text}</td><td>${weightToDisplay(s.weight)}</td><td>${s.reps}</td>${showRpe ? `<td>${s.rpe == null ? "—" : s.rpe}</td>` : ""}</tr>`;
+            }).join("")}
           </table>
         </div>
       `; }).join("")}
@@ -1687,6 +2043,8 @@
     check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7"/></svg>`,
     close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
     kebab: `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
+    barbell: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="8.5" width="2.5" height="7" rx="1"/><rect x="5.5" y="6.5" width="2.5" height="11" rx="1"/><line x1="8" y1="12" x2="16" y2="12"/><rect x="16" y="6.5" width="2.5" height="11" rx="1"/><rect x="19" y="8.5" width="2.5" height="7" rx="1"/></svg>`,
+    trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5h6v2"/><path d="M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`,
   };
 
   const EMPTY_STATE_ICONS = {
@@ -1740,6 +2098,8 @@
       case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
       case "history-tab": navigate("history", { tab: t.dataset.tab }); break;
+      case "cal-prev": calendarMonthOffset--; render(); break;
+      case "cal-next": if (calendarMonthOffset < 0) { calendarMonthOffset++; render(); } break;
       case "new-exercise": handleNewExercise(); break;
 
       case "set-unit-mode":
@@ -1755,6 +2115,28 @@
         state.settings.hapticsEnabled = t.dataset.value === "on";
         saveSettings(); render();
         break;
+      case "set-rpe-visible":
+        state.settings.showRpe = t.dataset.value === "on";
+        saveSettings(); render();
+        break;
+      case "set-rest-enabled":
+        state.settings.restTimerEnabled = t.dataset.value === "on";
+        saveSettings(); render();
+        break;
+      case "set-rest-sec":
+        state.settings.restTimerSec = parseInt(t.dataset.sec, 10) || 120;
+        saveSettings(); render();
+        break;
+      case "toggle-plate": {
+        const p = parseFloat(t.dataset.plate);
+        const arr = state.settings.platesLb || (state.settings.platesLb = []);
+        const i = arr.indexOf(p);
+        if (i >= 0) arr.splice(i, 1); else arr.push(p);
+        arr.sort((a, b) => b - a);
+        saveSettings(); render();
+        break;
+      }
+      case "export-csv": exportCsv(); break;
       case "export-data": exportData(); break;
       case "import-data": document.getElementById("import-file-input").click(); break;
       case "reset-data": resetData(); break;
@@ -1815,8 +2197,26 @@
         if (s.completed) {
           if (s.weight === "" ) s.weight = 0;
           if (s.reps === "") s.reps = 0;
+          if (!s.isWarmup && state.settings.restTimerEnabled) startRestTimer();
         }
         saveActiveWorkout(); render();
+        break;
+      }
+      case "set-type-menu":
+        openSetTypeMenu(parseInt(t.dataset.exidx, 10), parseInt(t.dataset.setidx, 10));
+        break;
+      case "plate-calc": {
+        const ex = state.activeWorkout.exercises[parseInt(t.dataset.exidx, 10)];
+        const top = Math.max(0, ...ex.sets.filter((x) => !x.isWarmup).map((x) => x.weight || 0));
+        openPlateCalc(top);
+        break;
+      }
+      case "superset-toggle": {
+        toggleSupersetWithNext(parseInt(t.dataset.exidx, 10));
+        break;
+      }
+      case "add-warmup-ramp": {
+        addWarmupRamp(parseInt(t.dataset.exidx, 10));
         break;
       }
     }
@@ -1833,17 +2233,23 @@
       else s.reps = parseInt(t.value, 10) || 0;
       cascadeSetForward(exIdx, setIdx, s.weight, s.reps);
       saveActiveWorkout();
+    } else if (action === "set-rpe") {
+      const exIdx = parseInt(t.dataset.exidx, 10), setIdx = parseInt(t.dataset.setidx, 10);
+      const s = state.activeWorkout.exercises[exIdx].sets[setIdx];
+      const v = parseFloat(t.value);
+      s.rpe = isNaN(v) ? null : Math.max(5, Math.min(10, v));
+      saveActiveWorkout();
     } else if (action === "routine-set-weight" || action === "routine-set-reps") {
       const re = renderRoutineEdit._draft.exercises[parseInt(t.dataset.index, 10)];
       const s = re.sets[parseInt(t.dataset.setidx, 10)];
       if (action === "routine-set-weight") s.weight = t.value === "" ? "" : weightFromDisplay(t.value);
       else s.reps = t.value === "" ? "" : (parseInt(t.value, 10) || 0);
-    } else if (action === "set-bodyweight") {
-      state.settings.bodyWeightLb = t.value === "" ? null : weightFromDisplay(t.value);
-      saveSettings();
     } else if (action === "set-height") {
       state.settings.heightIn = t.value === "" ? null : heightFromDisplay(t.value);
       saveSettings();
+    } else if (action === "set-bar-weight") {
+      const v = weightFromDisplay(t.value);
+      if (v > 0) { state.settings.barWeightLb = v; saveSettings(); }
     }
   }
 
@@ -1854,6 +2260,11 @@
       const file = t.files[0];
       t.value = ""; // reset so re-selecting the same file still fires change
       importData(file);
+    } else if (t.dataset.action === "set-bodyweight") {
+      // Log a dated bodyweight entry on commit (blur/enter), not per keystroke.
+      if (t.value === "") return;
+      const lb = weightFromDisplay(t.value);
+      if (lb > 0) { logBodyWeight(lb); showToast("Body weight logged"); render(); }
     }
   }
 
@@ -2262,6 +2673,42 @@
     URL.revokeObjectURL(url);
   }
 
+  // One row per completed set — the spreadsheet-friendly flat format lifters
+  // use for their own analysis. Weights are exported in the current display
+  // unit so the numbers match what's shown in the app.
+  function exportCsv() {
+    const u = unitLabel();
+    const esc = (v) => {
+      const str = String(v == null ? "" : v);
+      return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+    const rows = [["date", "workout", "exercise", "muscle", "set_type", `weight_${u}`, "reps", "rpe", "est_1rm"]];
+    const ordered = [...state.workouts].sort((a, b) => new Date(a.date) - new Date(b.date));
+    for (const w of ordered) {
+      const dateStr = new Date(w.date).toISOString().slice(0, 10);
+      for (const e of w.exercises) {
+        const ex = exerciseById(e.exerciseId);
+        for (const s of e.sets) {
+          const type = s.isWarmup ? "warmup" : (s.type || "working");
+          rows.push([
+            dateStr, w.name, ex ? ex.name : e.name, ex ? ex.muscle : "",
+            type, roundClean(weightToDisplay(s.weight) || 0), s.reps || 0,
+            s.rpe == null ? "" : s.rpe,
+            roundClean(displayUnit() === "kg" ? lbToKg(estOneRm(s.weight || 0, s.reps || 0)) : estOneRm(s.weight || 0, s.reps || 0)),
+          ]);
+        }
+      }
+    }
+    const csv = rows.map((r) => r.map(esc).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `just-lift-sets-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function importData(file) {
     let data;
     try {
@@ -2316,6 +2763,155 @@
     state.activeWorkout = null;
     navigate("home");
   }
+
+  // ---------- Set-type menu (tap a set number) ----------
+  let setTypeTarget = null;
+  const setTypeOverlayEl = document.getElementById("set-type-overlay");
+
+  function openSetTypeMenu(exIdx, setIdx) {
+    setTypeTarget = { exIdx, setIdx };
+    setTypeOverlayEl.classList.remove("hidden");
+    requestAnimationFrame(() => setTypeOverlayEl.classList.add("open"));
+  }
+  function closeSetTypeMenu() {
+    setTypeOverlayEl.classList.remove("open");
+    setTimeout(() => setTypeOverlayEl.classList.add("hidden"), 180);
+    setTypeTarget = null;
+  }
+  document.getElementById("set-type-close").addEventListener("click", () => { tapFeedback(null); closeSetTypeMenu(); });
+  document.getElementById("set-type-actions").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-type]");
+    if (!btn || !setTypeTarget) return;
+    tapFeedback(btn);
+    const { exIdx, setIdx } = setTypeTarget;
+    const ex = state.activeWorkout.exercises[exIdx];
+    const s = ex.sets[setIdx];
+    const type = btn.dataset.type;
+    if (type === "remove") ex.sets.splice(setIdx, 1);
+    else if (type === "normal") { s.isWarmup = false; delete s.type; }
+    else if (type === "warmup") { s.isWarmup = true; delete s.type; }
+    else { s.isWarmup = false; s.type = type; } // drop | failure
+    saveActiveWorkout();
+    closeSetTypeMenu();
+    render();
+  });
+
+  // ---------- Supersets & warm-up ramp ----------
+  function toggleSupersetWithNext(exIdx) {
+    const ex = state.activeWorkout.exercises;
+    if (exIdx >= ex.length - 1) { showToast("No exercise below to superset with"); return; }
+    const a = ex[exIdx], b = ex[exIdx + 1];
+    if (a.supersetId && a.supersetId === b.supersetId) {
+      a.supersetId = null; // break the link below this exercise
+    } else {
+      const id = b.supersetId || a.supersetId || ("ss-" + uid());
+      a.supersetId = id; b.supersetId = id;
+    }
+    // Clear any supersetId that no longer has a contiguous partner.
+    ex.forEach((e, i) => {
+      const prev = ex[i - 1], next = ex[i + 1];
+      if (e.supersetId && !(prev && prev.supersetId === e.supersetId) && !(next && next.supersetId === e.supersetId)) {
+        e.supersetId = null;
+      }
+    });
+    saveActiveWorkout();
+    render();
+  }
+
+  function addWarmupRamp(exIdx) {
+    const ex = state.activeWorkout.exercises[exIdx];
+    const top = Math.max(0, ...ex.sets.filter((s) => !s.isWarmup).map((s) => s.weight || 0));
+    if (!(top > 0)) { showToast("Enter a working weight first"); return; }
+    const ramp = warmupRamp(top);
+    if (!ramp.length) { showToast("Weight too light for a ramp"); return; }
+    ex.sets = [...ramp, ...ex.sets];
+    saveActiveWorkout();
+    render();
+    showToast(`Added ${ramp.length} warm-up sets`);
+  }
+
+  // ---------- Plate calculator ----------
+  let plateWeightLb = 0;
+  const plateOverlayEl = document.getElementById("plate-overlay");
+
+  function openPlateCalc(totalLb) {
+    plateWeightLb = totalLb || state.settings.barWeightLb || 45;
+    document.getElementById("plate-unit").textContent = unitLabel();
+    document.getElementById("plate-weight-input").value = weightToDisplay(plateWeightLb);
+    renderPlateVisual();
+    plateOverlayEl.classList.remove("hidden");
+    requestAnimationFrame(() => plateOverlayEl.classList.add("open"));
+  }
+  function closePlateCalc() {
+    plateOverlayEl.classList.remove("open");
+    setTimeout(() => plateOverlayEl.classList.add("hidden"), 180);
+  }
+  function plateHeight(p) { return Math.max(26, Math.min(66, 26 + p * 0.85)); }
+  function renderPlateVisual() {
+    const bar = state.settings.barWeightLb || 45;
+    const vis = document.getElementById("plate-visual");
+    const read = document.getElementById("plate-readout");
+    if (plateWeightLb < bar) {
+      vis.innerHTML = "";
+      read.innerHTML = `<span class="muted">Below the bar (${weightToDisplay(bar)} ${unitLabel()})</span>`;
+      return;
+    }
+    const { perSide, leftover, achievable } = computePlates(plateWeightLb);
+    vis.innerHTML = `<div class="plate-bar-graphic"><span class="plate-collar"></span>${
+      perSide.length
+        ? perSide.map((p) => `<span class="plate-disc" style="height:${plateHeight(p)}px">${weightToDisplay(p)}</span>`).join("")
+        : '<span class="muted" style="align-self:center;">empty bar</span>'
+    }<span class="plate-sleeve"></span></div>`;
+    const counts = {};
+    perSide.forEach((p) => (counts[p] = (counts[p] || 0) + 1));
+    const summary = Object.entries(counts).sort((a, b) => b[0] - a[0]).map(([p, n]) => `${n}×${weightToDisplay(parseFloat(p))}`).join("  +  ");
+    read.innerHTML = `<div class="plate-readout-line"><strong>Each side:</strong> ${summary || "—"}</div>` +
+      (achievable ? "" : `<div class="plate-warn">Closest loadable — ${weightToDisplay(leftover)} ${unitLabel()} short per side</div>`);
+  }
+  document.getElementById("plate-close").addEventListener("click", () => { tapFeedback(null); closePlateCalc(); });
+  document.getElementById("plate-weight-input").addEventListener("input", (e) => {
+    plateWeightLb = weightFromDisplay(e.target.value);
+    renderPlateVisual();
+  });
+
+  // ---------- Rest timer ----------
+  let restInterval = null, restEndAt = null, restTotal = 0;
+  function startRestTimer() {
+    restTotal = state.settings.restTimerSec || 120;
+    restEndAt = Date.now() + restTotal * 1000;
+    document.getElementById("rest-timer-bar").classList.remove("hidden");
+    tickRest();
+    if (restInterval) clearInterval(restInterval);
+    restInterval = setInterval(tickRest, 250);
+  }
+  function tickRest() {
+    if (restEndAt == null) return;
+    const remain = Math.max(0, (restEndAt - Date.now()) / 1000);
+    const countEl = document.getElementById("rest-timer-count");
+    if (countEl) countEl.textContent = fmtTime(remain);
+    const fill = document.getElementById("rest-timer-fill");
+    if (fill) fill.style.width = `${Math.max(0, Math.min(100, 100 * remain / restTotal))}%`;
+    if (remain <= 0) endRestTimer(true);
+  }
+  function adjustRest(deltaSec) {
+    if (restEndAt == null) return;
+    restEndAt += deltaSec * 1000;
+    restTotal = Math.max(restTotal, (restEndAt - Date.now()) / 1000);
+    tickRest();
+  }
+  function endRestTimer(completed) {
+    if (restInterval) { clearInterval(restInterval); restInterval = null; }
+    restEndAt = null;
+    const bar = document.getElementById("rest-timer-bar");
+    if (bar) bar.classList.add("hidden");
+    if (completed) {
+      try { playTone(880, 660, 0.05, 0.22, "sine"); } catch (e) {}
+      if (navigator.vibrate && state.settings.hapticsEnabled !== false) navigator.vibrate(180);
+    }
+  }
+  document.getElementById("rest-minus").addEventListener("click", () => { tapFeedback(null); adjustRest(-15); });
+  document.getElementById("rest-plus").addEventListener("click", () => { tapFeedback(null); adjustRest(15); });
+  document.getElementById("rest-skip").addEventListener("click", () => { tapFeedback(null); endRestTimer(false); });
 
   // ---------- Init ----------
   document.querySelectorAll(".tab").forEach((tab) => {
