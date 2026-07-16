@@ -248,17 +248,21 @@ h3 { font-size: var(--fs-xs); font-weight: var(--fw-bold); margin: 0 0 8px; colo
   background: transparent;
 }
 
-.btn-sm { padding: 8px 12px; font-size: var(--fs-xs); width: auto; min-height: 36px; }
+.btn-sm { padding: 10px 14px; font-size: var(--fs-xs); width: auto; min-height: 40px; }
 
 .icon-btn {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  padding: 8px 12px;
+  padding: 10px 12px;
   font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
   background: var(--surface);
   flex-shrink: 0;
   white-space: nowrap;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .icon-btn-danger {
@@ -327,6 +331,9 @@ input:focus, select:focus, textarea:focus {
   font-weight: var(--fw-medium);
   color: var(--accent);
   padding: 4px 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* Live elapsed-time readout shown in the workout-active topbar */
@@ -336,6 +343,26 @@ input:focus, select:focus, textarea:focus {
   font-variant-numeric: tabular-nums;
   color: var(--text);
   letter-spacing: 0.2px;
+}
+
+/* Pinned workout header — stays visible (with the live elapsed clock) no
+   matter how far you scroll through the exercise list. It sticks to the
+   inner edge of #app's own top padding, which already reserves the iOS
+   safe-area-inset-top, so the real status bar (clock/signal/battery) stays
+   fully visible above it exactly like it does everywhere else. */
+.topbar-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 15;
+  background: rgba(250, 250, 248, 0.86);
+  backdrop-filter: blur(14px) saturate(1.4);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  margin-left: -16px;
+  margin-right: -16px;
+  padding-left: 16px;
+  padding-right: 16px;
+  padding-bottom: 8px;
+  box-shadow: 0 1px 0 var(--border), var(--shadow-sm);
 }
 
 /* Tab bar */
@@ -377,14 +404,15 @@ input:focus, select:focus, textarea:focus {
   padding: 4px 2px;
 }
 .set-table th:first-child, .set-table td:first-child { text-align: left; padding-left: 4px; }
-.set-table td { padding: 4px 3px; text-align: center; }
+.set-table td { padding: 4px 2px; text-align: center; }
+.set-table td:last-child { padding-right: 4px; }
 .set-row { transition: background 0.15s; }
 .set-row.completed { background: var(--success-bg); border-radius: 8px; }
 .set-row.completed .set-input { background: transparent; border-color: transparent; font-weight: var(--fw-bold); }
 .set-check {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   border: 1px solid var(--border-strong);
   background: var(--surface);
   display: inline-flex;
@@ -392,13 +420,13 @@ input:focus, select:focus, textarea:focus {
   justify-content: center;
   color: var(--text-3);
 }
-.set-check svg { width: 16px; height: 16px; }
+.set-check svg { width: 17px; height: 17px; }
 .set-check.checked {
   background: var(--success);
   border-color: var(--success);
   color: #fff;
 }
-.set-num { font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-2); width: 22px; }
+.set-num { font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-2); }
 .set-prev { font-size: var(--fs-2xs); color: var(--text-3); }
 
 /* Warmup sets — visually distinct from working sets */
@@ -414,9 +442,9 @@ input:focus, select:focus, textarea:focus {
   color: var(--warmup);
 }
 .set-remove-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
   border: 1px solid var(--danger-bg);
   background: var(--danger-bg);
   color: var(--danger);
@@ -424,7 +452,7 @@ input:focus, select:focus, textarea:focus {
   align-items: center;
   justify-content: center;
 }
-.set-remove-btn svg { width: 14px; height: 14px; }
+.set-remove-btn svg { width: 15px; height: 15px; }
 .set-remove-btn:active { background: var(--danger-bg); opacity: 0.7; }
 
 .exercise-block { margin-bottom: 20px; }
@@ -459,8 +487,8 @@ input:focus, select:focus, textarea:focus {
   flex-shrink: 0;
 }
 .ex-menu-btn {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -470,7 +498,7 @@ input:focus, select:focus, textarea:focus {
   background: var(--surface);
   color: var(--text-2);
 }
-.ex-menu-btn svg { width: 16px; height: 16px; }
+.ex-menu-btn svg { width: 17px; height: 17px; }
 .ex-menu-btn:active { background: var(--surface-2); }
 
 /* Per-exercise "..." options menu (add note / add warmup set) */
@@ -709,12 +737,12 @@ input:focus, select:focus, textarea:focus {
 }
 .segmented button {
   flex: 1;
-  padding: 8px 8px;
+  padding: 11px 8px;
   border-radius: 6px;
   font-size: var(--fs-xs);
   font-weight: var(--fw-medium);
   color: var(--text-2);
-  min-height: 36px;
+  min-height: 40px;
 }
 .segmented button.active {
   background: var(--surface);
@@ -1060,9 +1088,9 @@ input:focus, select:focus, textarea:focus {
   background: transparent;
   font: inherit;
   cursor: pointer;
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
   color: var(--text-2);
   font-weight: var(--fw-bold);
   font-size: var(--fs-xs);
@@ -1125,9 +1153,13 @@ input:focus, select:focus, textarea:focus {
   border: none;
   background: transparent;
   color: var(--text-2);
-  padding: 4px;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 .ex-plate-btn svg { width: 22px; height: 22px; }
 .ex-plate-btn:active { background: var(--surface-2); color: var(--accent); }
@@ -1215,8 +1247,9 @@ input:focus, select:focus, textarea:focus {
   background: rgba(255,255,255,0.14);
   color: var(--bg);
   font-weight: var(--fw-bold);
-  font-size: var(--fs-2xs);
-  padding: 8px 10px;
+  font-size: var(--fs-xs);
+  padding: 12px 14px;
+  min-height: 44px;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
@@ -1242,7 +1275,7 @@ input:focus, select:focus, textarea:focus {
 .cal-nav {
   border: 1px solid var(--border-strong);
   background: var(--surface);
-  width: 34px; height: 34px;
+  width: 44px; height: 44px;
   border-radius: var(--radius-sm);
   font-size: 18px;
   color: var(--text);
@@ -1271,8 +1304,8 @@ input:focus, select:focus, textarea:focus {
 }
 .cal-cell.cal-today { box-shadow: 0 0 0 2px var(--chart-time); }
 
-.icon-btn-trash { color: var(--text-3); padding: 6px; }
-.icon-btn-trash svg { width: 17px; height: 17px; }
+.icon-btn-trash { color: var(--text-3); padding: 0; width: 40px; }
+.icon-btn-trash svg { width: 18px; height: 18px; }
 .icon-btn-trash:active { color: var(--danger); background: var(--danger-bg); }
 
 /* ============================================================

@@ -215,8 +215,12 @@
 
   function fmtTime(totalSec) {
     const s = Math.max(0, Math.round(totalSec));
-    const m = Math.floor(s / 60);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
     const sec = s % 60;
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+    }
     return `${m}:${sec.toString().padStart(2, "0")}`;
   }
 
@@ -1795,7 +1799,7 @@
     const w = state.activeWorkout;
     if (!w) { navigate("home"); return; }
     appEl.innerHTML = `
-      <div class="topbar">
+      <div class="topbar topbar-sticky">
         <button class="back-btn" data-action="discard-workout">Discard</button>
         <span class="workout-clock" id="workout-elapsed">${fmtTime((Date.now() - new Date(w.startedAt).getTime()) / 1000)}</span>
         <button class="btn btn-sm btn-primary" data-action="finish-workout">Finish</button>
