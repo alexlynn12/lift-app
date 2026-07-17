@@ -1334,6 +1334,78 @@ input[type="number"] {
 .muscle-vol-fill { height: 100%; background: linear-gradient(90deg, var(--chart-weight), var(--accent)); border-radius: 4px; }
 .muscle-vol-count { width: 22px; text-align: right; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-2); }
 
+/* ===== Analytics tab ===== */
+.az-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.az-stats .stat-card { margin-bottom: 0; }
+.stat-unit { font-size: var(--fs-2xs); font-weight: var(--fw-medium); color: var(--text-2); }
+
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+
+/* Weekly tonnage bars */
+.ton-chart { width: 100%; height: auto; display: block; }
+.ton-bar {
+  fill: var(--chart-weight-soft);
+  stroke: none;
+  transform-origin: center bottom;
+  animation: tonRise 0.5s cubic-bezier(0.33, 1, 0.68, 1) backwards;
+  animation-delay: calc(var(--d, 0) * 45ms);
+}
+.ton-bar-cur { fill: var(--chart-weight); }
+.ton-val { font-size: 8.5px; fill: var(--text-3); font-weight: var(--fw-medium); }
+@keyframes tonRise { from { transform: scaleY(0); } }
+
+/* Training load (acute:chronic) meter */
+.load-meter { position: relative; height: 10px; border-radius: 5px; overflow: hidden; background: var(--surface-2); }
+.load-band { position: absolute; top: 0; height: 100%; }
+.load-band-low { background: var(--surface-2); }
+.load-band-ok { background: var(--success-bg); }
+.load-band-ok::after { content: ""; }
+.load-band-push { background: var(--warmup-bg); }
+.load-band-spike { background: var(--danger-bg); }
+.load-marker {
+  position: absolute; top: -2px; height: 14px; width: 4px;
+  border-radius: 2px; background: var(--text);
+  transform: translateX(-50%);
+  box-shadow: 0 0 0 2px var(--surface);
+  transition: left 0.6s cubic-bezier(0.33, 1, 0.68, 1);
+}
+.load-scale { display: flex; justify-content: space-between; margin-top: 4px; font-size: var(--fs-2xs); color: var(--text-3); }
+
+/* Muscle stimulus vs. volume-landmark band */
+.stim-track { position: relative; }
+.stim-band {
+  position: absolute; top: 0; height: 100%;
+  background: var(--success-bg);
+  border-left: 1px dashed var(--success);
+  border-right: 1px dashed var(--success);
+  opacity: 0.7;
+}
+.stim-fill { position: relative; display: block; }
+.stim-fill.stim-low { background: linear-gradient(90deg, var(--chart-time-soft), var(--chart-time)); }
+.stim-fill.stim-optimal { background: linear-gradient(90deg, var(--chart-weight), var(--success)); }
+.stim-fill.stim-high { background: linear-gradient(90deg, var(--warmup), var(--danger)); }
+.stim-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.stim-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.stim-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.stim-dot.stim-low { background: var(--chart-time); }
+.stim-dot.stim-optimal { background: var(--success); }
+.stim-dot.stim-high { background: var(--danger); }
+
+/* Zone badge + effort-axis deltas */
+.az-zone-badge.az-zone-easing { background: var(--surface-2); color: var(--text-2); }
+.az-zone-badge.az-zone-optimal { background: var(--success-bg); color: var(--success); }
+.az-zone-badge.az-zone-pushing { background: var(--warmup-bg); color: var(--warmup); }
+.az-zone-badge.az-zone-spike { background: var(--danger-bg); color: var(--danger); }
+.az-axis-num { min-width: 44px; text-align: right; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-2); white-space: nowrap; }
+.az-delta { font-size: var(--fs-2xs); margin-left: 3px; }
+.az-delta.up { color: var(--success); }
+.az-delta.down { color: var(--danger); }
+
 /* Calendar */
 .cal-stats { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 16px; }
 .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
@@ -1459,6 +1531,7 @@ input:focus, textarea:focus, .set-input:focus {
 @media (prefers-reduced-motion: reduce) {
   *, #app.app-enter, #app.app-enter > *,
   .muscle-vol-fill, .effort-axis-fill, .cal-cell:not(.cal-empty),
+  .ton-bar, .load-marker,
   .set-check.set-pop, .rest-timer-bar:not(.hidden), .suggest-card {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;

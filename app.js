@@ -1055,12 +1055,13 @@
   function render() {
     const { route, params } = parseHash();
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.route === route));
-    document.getElementById("tabbar").style.display = ["home", "history", "exercises", "settings"].includes(route) ? "flex" : "none";
+    document.getElementById("tabbar").style.display = ["home", "history", "analytics", "settings"].includes(route) ? "flex" : "none";
 
     switch (route) {
       case "home": renderHome(); break;
       case "history": renderHistory(params); break;
-      case "exercises": renderExercises(params); break;
+      case "analytics": renderAnalytics(); break;
+      case "exercises": navigate("analytics"); break; // legacy route
       case "settings": renderSettings(); break;
       case "routine-edit": renderRoutineEdit(params); break;
       case "workout-active": renderWorkoutActive(); break;
@@ -1318,42 +1319,358 @@
     `;
   }
 
-  function renderExercises(params) {
-    const q = (params.q || "").toLowerCase();
-    const list = allExercises()
-      .filter((e) => !q || e.name.toLowerCase().includes(q) || e.muscle.toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name));
+  // ===== Analytics =====
+  // The Analytics tab: progress (strength trends, tonnage) and stimulus
+  // (weekly hard sets vs. hypertrophy volume landmarks, acute:chronic load
+  // ratio, effort-axis trends). Exercise browsing lives in History > Exercises.
+
+  // Which lift the strength-trend chart shows. In-memory only.
+  let analyticsExerciseId = null;
+
+  function weekStartMs(t) {
+    const d = new Date(t);
+    const day = (d.getDay() + 6) % 7; // Mon=0
+    d.setDate(d.getDate() - day);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+
+  // Total working-set tonnage per week (display units), oldest -> newest,
+  // always `weeks` slots ending at the current week (empty weeks = 0).
+  function weeklyTonnageSeries(weeks = 8) {
+    const WEEK = 7 * 86400000;
+    const thisWeek = weekStartMs(Date.now());
+    const out = [];
+    for (let i = weeks - 1; i >= 0; i--) out.push({ start: thisWeek - i * WEEK, value: 0 });
+    for (const w of state.workouts) {
+      const t = weekStartMs(new Date(w.date).getTime());
+      const slot = out.find((o) => o.start === t);
+      if (slot) slot.value += volumeDisplayValue(w);
+    }
+    return out;
+  }
+
+  // Acute:chronic workload ratio — the sports-science "are you ramping too
+  // fast / detraining?" signal. Acute = last 7 days of tonnage; chronic =
+  // average weekly tonnage over the last 28 days. ~0.8–1.3 is the classic
+  // sweet spot; >1.5 is a spike (injury-risk zone), <0.8 is easing off.
+  function trainingLoadBalance() {
+    const now = Date.now();
+    let acute = 0, chronic = 0, sessions28 = 0;
+    for (const w of state.workouts) {
+      const age = now - new Date(w.date).getTime();
+      if (age < 0) continue;
+      if (age <= 7 * 86400000) acute += volumeDisplayValue(w);
+      if (age <= 28 * 86400000) { chronic += volumeDisplayValue(w); sessions28++; }
+    }
+    const chronicWeekly = chronic / 4;
+    if (!(chronicWeekly > 0) || sessions28 < 3) return null; // not enough history to be meaningful
+    return { ratio: acute / chronicWeekly, acute, chronicWeekly };
+  }
+
+  // Lifts you actually train, most-logged first — the chip choices for the
+  // strength trend. Needs ≥2 sessions to draw a trend at all.
+  function mostTrainedExercises(limit = 6) {
+    const counts = new Map();
+    for (const w of state.workouts) {
+      for (const e of w.exercises) {
+        if (e.sets.some((s) => s.completed && !s.isWarmup)) {
+          counts.set(e.exerciseId, (counts.get(e.exerciseId) || 0) + 1);
+        }
+      }
+    }
+    return [...counts.entries()]
+      .filter(([, n]) => n >= 2)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit)
+      .map(([id]) => exerciseById(id))
+      .filter(Boolean);
+  }
+
+  // Best estimated 1RM per session for one lift, oldest -> newest, display units.
+  function e1rmSeriesFor(exerciseId, limit = 12) {
+    const pts = [];
+    for (const w of state.workouts) {
+      const e = w.exercises.find((x) => x.exerciseId === exerciseId);
+      if (!e) continue;
+      let best = 0;
+      for (const s of e.sets) {
+        if (s.completed && !s.isWarmup && s.weight > 0) best = Math.max(best, estOneRm(s.weight, s.reps));
+      }
+      if (best > 0) pts.push({ date: w.date, value: displayUnit() === "kg" ? lbToKg(best) : best });
+    }
+    return pts.slice(0, limit).reverse();
+  }
+
+  // Average hard sets per muscle group per week over the last 28 days,
+  // scored against the hypertrophy volume landmarks (MEV ~10, MRV ~20
+  // weekly sets — the RP/Israetel rule-of-thumb band).
+  const STIM_MEV = 10, STIM_MRV = 20;
+  function muscleStimulus(days = 28) {
+    const cutoff = Date.now() - days * 86400000;
+    const counts = {};
+    for (const w of state.workouts) {
+      if (new Date(w.date).getTime() < cutoff) continue;
+      for (const e of w.exercises) {
+        const ex = exerciseById(e.exerciseId);
+        if (!ex) continue;
+        const working = e.sets.filter((s) => s.completed && !s.isWarmup).length;
+        if (working) counts[ex.muscle] = (counts[ex.muscle] || 0) + working;
+      }
+    }
+    const weeksSpanned = days / 7;
+    return Object.entries(counts)
+      .map(([muscle, sets]) => {
+        const perWeek = sets / weeksSpanned;
+        const zone = perWeek < STIM_MEV ? "low" : perWeek <= STIM_MRV ? "optimal" : "high";
+        return { muscle, perWeek, zone };
+      })
+      .sort((a, b) => b.perWeek - a.perWeek);
+  }
+
+  // Mean effort-axis scores (intensity / muscle / volume, each 0-100) over
+  // the last 28 days vs. the 28 days before that.
+  function effortAxisTrend() {
+    const now = Date.now();
+    const cur = { intensity: [], muscle: [], volume: [] };
+    const prev = { intensity: [], muscle: [], volume: [] };
+    for (const w of state.workouts) {
+      if (!w.effortBreakdown) continue;
+      const age = now - new Date(w.date).getTime();
+      const bucket = age <= 28 * 86400000 ? cur : age <= 56 * 86400000 ? prev : null;
+      if (!bucket) continue;
+      for (const k of ["intensity", "muscle", "volume"]) bucket[k].push(w.effortBreakdown[k] || 0);
+    }
+    const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
+    return ["intensity", "muscle", "volume"].map((k) => ({
+      axis: k,
+      current: avg(cur[k]),
+      previous: avg(prev[k]),
+    }));
+  }
+
+  // PR events (new best working-set weight for a lift), newest first. The
+  // first-ever log of a lift isn't counted — a PR means beating a previous best.
+  function recentPRs(limit = 8) {
+    const best = new Map();
+    const events = [];
+    for (const w of [...state.workouts].reverse()) { // oldest -> newest
+      for (const e of w.exercises) {
+        let maxW = 0, reps = 0;
+        for (const s of e.sets) {
+          if (s.completed && !s.isWarmup && (s.weight || 0) > maxW) { maxW = s.weight; reps = s.reps; }
+        }
+        if (!(maxW > 0)) continue;
+        if (best.has(e.exerciseId)) {
+          if (maxW > best.get(e.exerciseId)) {
+            best.set(e.exerciseId, maxW);
+            events.push({ date: w.date, exerciseId: e.exerciseId, weight: maxW, reps });
+          }
+        } else {
+          best.set(e.exerciseId, maxW);
+        }
+      }
+    }
+    return events.reverse().slice(0, limit);
+  }
+
+  // Weekly tonnage as a compact SVG bar chart. Values already in display units.
+  function renderTonnageBars(series) {
+    if (!series.some((s) => s.value > 0)) {
+      return `<div class="chart-empty">Log workouts to see weekly volume</div>`;
+    }
+    const W = 320, H = 150, padX = 10, padTop = 22, padBottom = 24;
+    const baseY = H - padBottom;
+    const max = Math.max(...series.map((s) => s.value), 1);
+    const slot = (W - padX * 2) / series.length;
+    const barW = Math.min(28, slot * 0.62);
+    const fmtK = (v) => (v >= 10000 ? `${Math.round(v / 1000)}k` : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`);
+    const bars = series.map((s, i) => {
+      const h = Math.max(s.value > 0 ? 3 : 0, (s.value / max) * (baseY - padTop));
+      const x = padX + i * slot + (slot - barW) / 2;
+      const y = baseY - h;
+      const isCur = i === series.length - 1;
+      const d = new Date(s.start);
+      const lbl = `${d.getMonth() + 1}/${d.getDate()}`;
+      return `
+        <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="5"
+          class="ton-bar ${isCur ? "ton-bar-cur" : ""}" style="--d:${i}" />
+        ${s.value > 0 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" class="ton-val">${fmtK(s.value)}</text>` : ""}
+        ${i % 2 === series.length % 2 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="chart-date-label">${lbl}</text>` : ""}
+      `;
+    }).join("");
+    return `
+      <svg class="chart-svg ton-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Weekly training volume">
+        <line x1="${padX}" y1="${baseY}" x2="${W - padX}" y2="${baseY}" class="chart-baseline" />
+        ${bars}
+      </svg>
+    `;
+  }
+
+  function renderAnalytics() {
+    // --- snapshot (last 28 days) ---
+    const cutoff28 = Date.now() - 28 * 86400000;
+    const recent = state.workouts.filter((w) => new Date(w.date).getTime() >= cutoff28);
+    const tonnage28 = recent.reduce((t, w) => t + volumeDisplayValue(w), 0);
+    const efforts = recent.filter((w) => typeof w.effortScore === "number").map((w) => w.effortScore);
+    const avgEffort = efforts.length ? Math.round(efforts.reduce((a, b) => a + b, 0) / efforts.length) : null;
+    const prs28 = recent.reduce((t, w) => t + (w.prCount || 0), 0);
+
+    if (state.workouts.length === 0) {
+      appEl.innerHTML = `
+        <div class="topbar"><h1>Analytics</h1></div>
+        ${emptyStateHtml("No data yet", "Finish a few workouts and your progress and stimulus analytics will build up here.", "workouts")}
+      `;
+      return;
+    }
+
+    // --- strength trend ---
+    const lifts = mostTrainedExercises();
+    if (!analyticsExerciseId || !lifts.some((l) => l.id === analyticsExerciseId)) {
+      analyticsExerciseId = lifts[0] ? lifts[0].id : null;
+    }
+    const e1rmData = analyticsExerciseId ? e1rmSeriesFor(analyticsExerciseId) : [];
+    const e1rmDelta = e1rmData.length >= 2 ? e1rmData[e1rmData.length - 1].value - e1rmData[0].value : null;
+
+    const load = trainingLoadBalance();
+    const stim = muscleStimulus();
+    const axes = effortAxisTrend();
+    const prs = recentPRs();
+    const AXIS_LABELS = { intensity: "Intensity", muscle: "Muscle", volume: "Volume" };
+
+    // Load-meter marker position: map ratio 0–2 onto 0–100%.
+    const loadPos = load ? Math.min(100, Math.max(0, (load.ratio / 2) * 100)) : 0;
+    const loadZone = load ? (load.ratio < 0.8 ? "easing" : load.ratio <= 1.3 ? "optimal" : load.ratio <= 1.5 ? "pushing" : "spike") : null;
+    const LOAD_CAPTIONS = {
+      easing: "Easing off — this week is lighter than your recent average. Fine for a deload, watch for detraining if it persists.",
+      optimal: "Sweet spot — this week's load matches what your body is adapted to.",
+      pushing: "Pushing — load is ramping above your recent average. Productive, but keep an eye on recovery.",
+      spike: "Spike — this week is way above what you're adapted to. Elevated injury risk; consider pulling back.",
+    };
 
     appEl.innerHTML = `
-      <div class="topbar"><h1>Exercises</h1></div>
-      <input type="text" id="ex-search" placeholder="Search exercises" value="${escapeHtml(params.q || "")}" style="margin-bottom:16px;" />
-      <div>
-        ${list.map((ex) => `
-          <div class="list-row card-tap" data-action="view-exercise" data-id="${ex.id}">
-            <div>
-              <div class="row-title">${escapeHtml(ex.name)}</div>
-              <div class="tiny muted">${ex.muscle} · ${ex.equipment}</div>
-            </div>
-            <span class="muted">›</span>
-          </div>
-        `).join("")}
+      <div class="topbar"><h1>Analytics</h1></div>
+
+      <div class="az-stats">
+        <div class="stat-card"><div class="stat-label">Sessions · 4wk</div><div class="stat-value">${recent.length}</div></div>
+        <div class="stat-card"><div class="stat-label">Volume · 4wk</div><div class="stat-value">${Math.round(tonnage28).toLocaleString()}<span class="stat-unit"> ${unitLabel()}</span></div></div>
+        <div class="stat-card"><div class="stat-label">Avg effort</div><div class="stat-value">${avgEffort != null ? avgEffort + "%" : "–"}</div></div>
+        <div class="stat-card"><div class="stat-label">PRs · 4wk</div><div class="stat-value">${prs28}</div></div>
       </div>
-      <button class="fab-add" data-action="new-exercise" style="margin-top:16px;">+ Add custom exercise</button>
+
+      ${lifts.length ? `
+        <div class="section">
+          <div class="row" style="margin-bottom:8px;">
+            <h3 style="margin:0;">Strength trend</h3>
+            ${e1rmDelta != null ? `<span class="badge ${e1rmDelta >= 0 ? "badge-success" : "badge-effort"}">${e1rmDelta >= 0 ? "▲" : "▼"} ${Math.abs(Math.round(e1rmDelta))} ${unitLabel()}</span>` : ""}
+          </div>
+          <div class="chip-row">
+            ${lifts.map((l) => `<button class="chip ${l.id === analyticsExerciseId ? "chip-selected" : ""}" data-action="analytics-exercise" data-id="${l.id}">${escapeHtml(l.name)}</button>`).join("")}
+          </div>
+          <div class="chart-wrap">${renderLineChart(e1rmData, { label: "Estimated 1RM over recent sessions" })}</div>
+          <div class="tiny muted">Best estimated 1RM per session (Epley). Tap a point for detail.</div>
+        </div>
+      ` : ""}
+
+      <div class="section">
+        <h3>Weekly volume</h3>
+        <div class="card">
+          ${renderTonnageBars(weeklyTonnageSeries())}
+          <div class="tiny muted" style="margin-top:6px;">Working-set tonnage (weight × reps) per week, ${unitLabel()}.</div>
+        </div>
+      </div>
+
+      ${load ? `
+        <div class="section">
+          <div class="row" style="margin-bottom:8px;">
+            <h3 style="margin:0;">Training load</h3>
+            <span class="badge az-zone-badge az-zone-${loadZone}">${load.ratio.toFixed(2)}× · ${loadZone}</span>
+          </div>
+          <div class="card">
+            <div class="load-meter">
+              <div class="load-band load-band-low" style="left:0; width:40%;"></div>
+              <div class="load-band load-band-ok" style="left:40%; width:25%;"></div>
+              <div class="load-band load-band-push" style="left:65%; width:10%;"></div>
+              <div class="load-band load-band-spike" style="left:75%; width:25%;"></div>
+              <div class="load-marker" style="left:${loadPos.toFixed(1)}%;"></div>
+            </div>
+            <div class="load-scale"><span>0</span><span>0.8</span><span>1.3</span><span>1.5</span><span>2+</span></div>
+            <div class="tiny muted" style="margin-top:8px;">${LOAD_CAPTIONS[loadZone]}</div>
+            <div class="tiny muted" style="margin-top:4px;">This week ÷ 4-week average tonnage (acute : chronic workload ratio).</div>
+          </div>
+        </div>
+      ` : ""}
+
+      ${stim.length ? `
+        <div class="section">
+          <h3>Muscle stimulus</h3>
+          <div class="card">
+            ${stim.map((v) => {
+              const pct = Math.min(100, (v.perWeek / 24) * 100);
+              return `
+              <div class="muscle-vol-row">
+                <span class="muscle-vol-name">${escapeHtml(v.muscle)}</span>
+                <span class="muscle-vol-track stim-track">
+                  <span class="stim-band" style="left:${(STIM_MEV / 24) * 100}%; width:${((STIM_MRV - STIM_MEV) / 24) * 100}%;"></span>
+                  <span class="muscle-vol-fill stim-fill stim-${v.zone}" style="width:${pct.toFixed(1)}%"></span>
+                </span>
+                <span class="muscle-vol-count">${v.perWeek < 10 ? v.perWeek.toFixed(1) : Math.round(v.perWeek)}</span>
+              </div>`;
+            }).join("")}
+            <div class="stim-legend tiny muted">
+              <span><i class="stim-dot stim-low"></i>&lt;${STIM_MEV} building</span>
+              <span><i class="stim-dot stim-optimal"></i>${STIM_MEV}–${STIM_MRV} growth zone</span>
+              <span><i class="stim-dot stim-high"></i>&gt;${STIM_MRV} very high</span>
+            </div>
+            <div class="tiny muted" style="margin-top:6px;">Avg hard sets per muscle per week, last 4 weeks. The shaded band is the ~${STIM_MEV}–${STIM_MRV} set hypertrophy zone (MEV→MRV).</div>
+          </div>
+        </div>
+      ` : ""}
+
+      ${axes.some((a) => a.current != null) ? `
+        <div class="section">
+          <h3>Effort profile · 4wk</h3>
+          <div class="card">
+            ${axes.filter((a) => a.current != null).map((a) => {
+              const delta = a.previous != null ? Math.round(a.current - a.previous) : null;
+              return `
+              <div class="muscle-vol-row">
+                <span class="muscle-vol-name">${AXIS_LABELS[a.axis]}</span>
+                <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.round(a.current)}%"></span></span>
+                <span class="az-axis-num">${Math.round(a.current)}${delta != null && delta !== 0 ? `<span class="az-delta ${delta > 0 ? "up" : "down"}">${delta > 0 ? "▲" : "▼"}${Math.abs(delta)}</span>` : ""}</span>
+              </div>`;
+            }).join("")}
+            <div class="tiny muted" style="margin-top:8px;">Average score per effort axis over the last 4 weeks${axes.some((a) => a.previous != null) ? "; arrows vs. the 4 weeks before" : ""}.</div>
+          </div>
+        </div>
+      ` : ""}
+
+      ${prs.length ? `
+        <div class="section">
+          <h3>Recent PRs</h3>
+          ${prs.map((p) => {
+            const ex = exerciseById(p.exerciseId);
+            return `
+            <div class="list-row card-tap" data-action="view-exercise" data-id="${p.exerciseId}">
+              <div>
+                <div class="row-title">${ex ? escapeHtml(ex.name) : "Exercise"}</div>
+                <div class="tiny muted">${fmtDate(p.date)}</div>
+              </div>
+              <span class="badge badge-success">${weightToDisplay(p.weight)} ${unitLabel()} × ${p.reps}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      ` : ""}
     `;
-    const search = document.getElementById("ex-search");
-    search.addEventListener("input", () => {
-      const params2 = { q: search.value };
-      const qs = "?" + new URLSearchParams(params2).toString();
-      history.replaceState(null, "", "#exercises" + qs);
-    });
-    search.addEventListener("change", () => render());
-    search.focus();
-    search.selectionStart = search.value.length;
+
+    if (e1rmData.length >= 2) {
+      initProgressChart(document.getElementById("progress-chart"), e1rmData, (v) => `${roundClean(v)} ${unitLabel()} e1RM`);
+    }
   }
 
   function renderExerciseDetail(params) {
     const ex = exerciseById(params.id);
-    if (!ex) { navigate("exercises"); return; }
+    if (!ex) { navigate("history", { tab: "exercises" }); return; }
     const history = [];
     for (const w of state.workouts) {
       const e = w.exercises.find((x) => x.exerciseId === ex.id);
@@ -2260,6 +2577,10 @@
         break;
       }
       case "view-workout": navigate("workout-detail", { id: t.dataset.id }); break;
+      case "analytics-exercise":
+        analyticsExerciseId = t.dataset.id;
+        render();
+        break;
       case "home-chart-metric":
         if (homeChartMetric !== t.dataset.metric) { homeChartMetric = t.dataset.metric; render(); }
         break;
