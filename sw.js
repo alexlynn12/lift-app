@@ -1,4 +1,4 @@
-const CACHE = "lift-v5";
+const CACHE = "lift-v7";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,6 +7,7 @@ const ASSETS = [
   "./db.js",
   "./exercises-data.js",
   "./program-seed.js",
+  "./program-plan.js",
   "./manifest.json",
 ];
 
@@ -27,7 +28,7 @@ self.addEventListener("activate", (e) => {
 // Network-first for the app shell (HTML/CSS/JS) so updates show up immediately
 // whenever the device is online. Falls back to the cached copy when offline.
 // Other same-origin GETs (icons, manifest) stay cache-first since they rarely change.
-const SHELL_NAMES = ["index.html", "styles.css", "app.js", "db.js", "exercises-data.js", "program-seed.js"];
+const SHELL_NAMES = ["index.html", "styles.css", "app.js", "db.js", "exercises-data.js", "program-seed.js", "program-plan.js"];
 
 self.addEventListener("fetch", (e) => {
   if (e.request.method !== "GET") return;

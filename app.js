@@ -20,6 +20,12 @@
       // Dated bodyweight log [{date, lb}] powering the trend chart and the
       // bodyweight-exercise effort scoring. bodyWeightLb mirrors the latest.
       bodyWeightLog: [],
+      // Program tracking: the Sunday week 1 of the 16-week cycle began on.
+      // Clearing it (Settings) turns program tracking + the coach off.
+      programStartDate: (typeof PROGRAM_PLAN !== "undefined" ? PROGRAM_PLAN.defaultStartDate : null),
+      // Coach adjustments the user applied, keyed by week number:
+      // { "9": { bench: 270, scale: 0.95 } } — see program-plan.js.
+      programAdjustments: {},
     },
     customExercises: [],
     routines: [],
@@ -278,6 +284,7 @@
     state.customExercises = customExercises || [];
     state.routines = routines || [];
     await seedProgram();
+    await syncSeedRoutinesToPlan();
     state.workouts = (workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     state.activeWorkout = activeWorkout;
 
@@ -654,6 +661,470 @@
     log.sort((a, b) => new Date(a.date) - new Date(b.date));
     state.settings.bodyWeightLb = log[log.length - 1].lb; // keep mirror in sync
     saveSettings();
+  }
+
+  // ---------- Program tracking + coach engine ----------
+  // Everything here keys off program-plan.js (the full 16-week cycle) plus
+  // the person's logged workouts. The coach never changes loads silently:
+  // rule hits become suggestions with an explicit Apply button, which write
+  // into settings.programAdjustments and re-sync the seeded routines.
+
+  function programState() {
+    const startDate = state.settings.programStartDate;
+    if (!startDate || typeof PROGRAM_PLAN === "undefined") return null;
+    const week = planWeekNumber(startDate);
+    if (week == null || week < 1) return null;
+    const clamped = Math.min(week, PROGRAM_PLAN.totalWeeks);
+    return {
+      startDate,
+      week,
+      clamped,
+      post: week > PROGRAM_PLAN.totalWeeks,
+      row: planWeekRow(clamped),
+      weekStartMs: planWeekStartMs(startDate, week),
+    };
+  }
+
+  // Rewrites the plan-driven main lifts inside the seeded routines to this
+  // week's targets (sets × reps × load + note). Runs on every launch and
+  // after an Apply — idempotent, and never touches accessories, user-created
+  // routines, or any workout history.
+  async function syncSeedRoutinesToPlan() {
+    const ps = programState();
+    if (!ps || ps.post) return;
+    const targets = planRoutineTargets(ps.clamped, state.settings.programAdjustments);
+    for (const r of state.routines) {
+      const t = targets[r.id];
+      if (!t) continue;
+      let changed = false;
+      for (const ex of r.exercises) {
+        const spec = t[ex.exerciseId];
+        if (!spec) continue;
+        delete t[ex.exerciseId]; // only the first matching exercise per routine takes the target
+        const newSets = spec.sets.map((s) => ({ weight: s.weight, reps: s.reps, isWarmup: false }));
+        if (ex.note !== spec.note || JSON.stringify(ex.sets) !== JSON.stringify(newSets)) {
+          ex.note = spec.note;
+          ex.sets = newSets;
+          changed = true;
+        }
+      }
+      if (changed) await DB.put("routines", r);
+    }
+  }
+
+  function liftKeyExerciseId(liftKey) { return liftKey === "bench" ? "barbell-bench-press" : "squat"; }
+  function liftKeyName(liftKey) { return liftKey === "bench" ? "Bench" : "Squat"; }
+
+  // Best-e1RM-per-session series for a lift since the cycle started, oldest
+  // first. When an RPE was logged on the set, reps-in-reserve get folded into
+  // the Epley estimate (a capped RPE-8.5 triple is NOT a true 3RM — treating
+  // it as one would make every on-program week read as a strength loss).
+  // Effective reps capped at 12 to keep the formula in its reliable range and
+  // keep pump work from polluting the strength trend.
+  function cycleE1rmSeries(liftKey) {
+    const ps = programState();
+    if (!ps) return [];
+    const exId = liftKeyExerciseId(liftKey);
+    const startMs = planWeekStartMs(ps.startDate, 1);
+    const pts = [];
+    for (const w of state.workouts) { // newest first
+      if (new Date(w.date).getTime() < startMs) continue;
+      const e = w.exercises.find((x) => x.exerciseId === exId);
+      if (!e) continue;
+      let best = 0;
+      for (const s of e.sets) {
+        if (!s.completed || s.isWarmup || !(s.weight > 0) || !((s.reps || 0) > 0) || s.reps > 10) continue;
+        const rir = s.type === "failure" ? 0 : (typeof s.rpe === "number" && s.rpe > 0 ? Math.max(0, 10 - s.rpe) : 0);
+        const effReps = Math.min(12, s.reps + rir);
+        best = Math.max(best, estOneRm(s.weight, effReps));
+      }
+      if (best > 0) pts.push({ date: w.date, value: best, week: planWeekNumber(ps.startDate, new Date(w.date).getTime()) });
+    }
+    return pts.reverse();
+  }
+
+  // Where a lift stands vs. its week-16 goal band. The pace line is anchored
+  // to the lifter's OWN first logged e1RM of the cycle (not the sheet's 1RM
+  // input) — e1RM from capped training sets systematically under-reads a true
+  // max, so comparing training-e1RM against training-e1RM-plus-required-gain
+  // is the honest like-for-like. Current = best of the last 28 days, so a
+  // deload dip doesn't erase it.
+  function liftTrajectory(liftKey) {
+    const ps = programState();
+    if (!ps) return null;
+    const goal = PROGRAM_PLAN.goals[liftKey];
+    const base = PROGRAM_PLAN.oneRm[liftKey];
+    const series = cycleE1rmSeries(liftKey);
+    if (!series.length) return { liftKey, base, goal, current: null };
+    const cutoff = Date.now() - 28 * 86400000;
+    let current = 0;
+    for (const p of series) {
+      if (new Date(p.date).getTime() >= cutoff) current = Math.max(current, p.value);
+    }
+    if (!current) current = series[series.length - 1].value;
+    // Anchor: best e1RM across the first two logged program weeks.
+    const firstWeek = series[0].week;
+    let anchor = 0;
+    for (const p of series) if (p.week <= firstWeek + 1) anchor = Math.max(anchor, p.value);
+    const goalMid = (goal.lo + goal.hi) / 2;
+    const requiredGain = goalMid - base; // e.g. bench +10, squat ≈ 0
+    const weeksTotal = Math.max(1, PROGRAM_PLAN.totalWeeks - firstWeek);
+    const frac = Math.min(1, Math.max(0, (ps.clamped - firstWeek) / weeksTotal));
+    const expected = anchor + Math.max(0, requiredGain) * frac;
+    const delta = current - expected;
+    let status = delta >= 5 ? "ahead" : delta >= -7.5 ? "on-pace" : "behind";
+    // Deload / peak / test weeks train low-rep submax singles — e1RM
+    // under-reads there by design, so don't call that "behind".
+    if (status === "behind" && ["Deload", "Peak", "Test"].includes(ps.row.block)) status = "on-pace";
+    if (series.length < 3) status = "building"; // too little data to judge pace
+    let projected = null;
+    if (series.length >= 2) {
+      const first = series[0], last = series[series.length - 1];
+      const spanDays = (new Date(last.date) - new Date(first.date)) / 86400000;
+      if (spanDays >= 14) {
+        const slope = (last.value - first.value) / spanDays;
+        const testMs = planWeekStartMs(ps.startDate, PROGRAM_PLAN.totalWeeks) + 3.5 * 86400000;
+        const daysLeft = Math.max(0, (testMs - Date.now()) / 86400000);
+        projected = Math.max(current, Math.min(current + slope * daysLeft, current * 1.06));
+      }
+    }
+    return { liftKey, base, goal, current, anchor, expected, delta, status, projected };
+  }
+
+  // Recent comp-lift sessions (the heavy Sun bench / Mon squat work — not
+  // Friday speed bench), newest first, each with the plan's target for the
+  // week it was logged in.
+  function recentMainLiftSessions(liftKey, limit = 6) {
+    const ps = programState();
+    if (!ps) return [];
+    const exId = liftKeyExerciseId(liftKey);
+    const compRoutine = liftKey === "bench" ? "seed-sun-heavy-bench" : "seed-mon-squat-primary";
+    const out = [];
+    for (const w of state.workouts) { // newest first
+      const e = w.exercises.find((x) => x.exerciseId === exId);
+      if (!e) continue;
+      const working = e.sets.filter((s) => s.completed && !s.isWarmup && s.weight > 0);
+      if (!working.length) continue;
+      const top = working.reduce((a, b) => ((b.weight || 0) > (a.weight || 0) ? b : a));
+      const wkNum = planWeekNumber(ps.startDate, new Date(w.date).getTime());
+      if (wkNum == null || wkNum < 1) continue;
+      const planTop = planTopSetFor(Math.min(wkNum, PROGRAM_PLAN.totalWeeks), liftKey, state.settings.programAdjustments);
+      const isComp = w.routineId === compRoutine || top.weight >= planTop.load * 0.9;
+      if (!isComp) continue;
+      out.push({ workout: w, week: wkNum, top, planTop });
+      if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  // This-program-week adherence + arm-volume stats for the coach panel.
+  function coachWeekStats() {
+    const ps = programState();
+    if (!ps || ps.post) return null;
+    const weekStart = ps.weekStartMs;
+    const weekEnd = weekStart + 7 * 86400000;
+    const days = new Set();
+    let biceps = 0, triceps = 0;
+    for (const w of state.workouts) {
+      const t = new Date(w.date).getTime();
+      if (t < weekStart || t >= weekEnd) continue;
+      days.add(new Date(w.date).toISOString().slice(0, 10));
+      for (const e of w.exercises) {
+        const ex = exerciseById(e.exerciseId);
+        if (!ex) continue;
+        const working = e.sets.filter((s) => s.completed && !s.isWarmup).length;
+        if (ex.muscle === "Biceps") biceps += working;
+        else if (ex.muscle === "Triceps") triceps += working;
+      }
+    }
+    const required = planRequiredSessions(ps.clamped);
+    const dayOfWeek = Math.min(6, Math.max(0, Math.floor((Date.now() - weekStart) / 86400000)));
+    const arm = PROGRAM_PLAN.armSets;
+    const scale = ps.row.block === "Deload" ? 0.5 : 1;
+    return {
+      sessionsDone: days.size,
+      sessionsRequired: required,
+      dayOfWeek,
+      trimmed: ps.row.block === "Peak" || ps.row.block === "Test",
+      biceps: { done: biceps, lo: Math.round(arm.biceps[0] * scale), hi: Math.round(arm.biceps[1] * scale) },
+      triceps: { done: triceps, lo: Math.round(arm.triceps[0] * scale), hi: Math.round(arm.triceps[1] * scale) },
+    };
+  }
+
+  // "4×3 @ 270" (+ back-off segments) from a target set list.
+  function summarizeSets(sets) {
+    if (!sets || !sets.length) return "";
+    const segs = [];
+    for (const s of sets) {
+      const last = segs[segs.length - 1];
+      if (last && last.weight === s.weight && last.reps === s.reps) last.n++;
+      else segs.push({ n: 1, weight: s.weight, reps: s.reps });
+    }
+    return segs.map((g) => `${g.n}×${g.reps} @ ${g.weight}`).join(" + ");
+  }
+
+  // The coach's read on where things stand: rule checks from the program
+  // sheet (RPE cap beats the % ladder, two-over-cap fatigue pull, Wed
+  // pressing auto-drop), block-transition heads-ups, and adherence flags.
+  // Ordered most-actionable first.
+  function coachInsights() {
+    const ps = programState();
+    if (!ps) return [];
+    if (ps.post) {
+      return [{ kind: "info", title: "Cycle complete", body: "Week 16 has passed — log your test-day maxes, then run the 6–8 week arm block before the next strength cycle." }];
+    }
+    const insights = [];
+    const adjustments = state.settings.programAdjustments || {};
+    const row = ps.row;
+
+    // Per-lift RPE-cap / progression checks on the latest comp session.
+    const allComp = [];
+    for (const liftKey of ["bench", "squat"]) {
+      const sessions = recentMainLiftSessions(liftKey);
+      sessions.forEach((s) => allComp.push({ ...s, liftKey }));
+      if (!sessions.length) continue;
+      const last = sessions[0];
+      const name = liftKeyName(liftKey);
+      const loggedRpe = typeof last.top.rpe === "number" ? last.top.rpe : (last.top.type === "failure" ? 10 : null);
+      const cap = last.planTop.rpeCap;
+      if (loggedRpe != null && loggedRpe > cap && row.block !== "Test") {
+        const targetWeek = Math.min(last.week + 1, PROGRAM_PLAN.totalWeeks);
+        const nextPlan = planTopSetFor(targetWeek, liftKey, adjustments);
+        if (nextPlan.load > last.top.weight && !(adjustments[String(targetWeek)] || {})[liftKey]) {
+          insights.push({
+            kind: "suggest",
+            title: `${name}: repeat ${last.top.weight} lb next week`,
+            body: `Top set ${last.top.weight}×${last.top.reps} came in at RPE ${loggedRpe} — over the ≤ ${cap} cap. The cap beats the % ladder: repeat the load instead of jumping to ${nextPlan.load}.`,
+            apply: { week: targetWeek, set: { [liftKey]: last.top.weight } },
+            applyLabel: `Set wk ${targetWeek} to ${last.top.weight}`,
+          });
+        }
+      } else if (loggedRpe != null && loggedRpe <= cap - 1 && !["Deload", "Test"].includes(row.block)) {
+        const nxt = last.week < PROGRAM_PLAN.totalWeeks ? planTopSetFor(last.week + 1, liftKey, adjustments) : null;
+        insights.push({
+          kind: "good",
+          title: `${name} moving well`,
+          body: `Top set at RPE ${loggedRpe}, a full point under the ${cap} cap${nxt && nxt.load > last.top.weight ? ` — green light for the programmed jump to ${nxt.load}` : ""}.`,
+        });
+      }
+    }
+
+    // Fatigue rule: the two most recent comp sessions (either lift) both over cap.
+    if (allComp.length >= 2) {
+      allComp.sort((a, b) => new Date(b.workout.date) - new Date(a.workout.date));
+      const lastTwo = allComp.slice(0, 2);
+      const bothOver = lastTwo.every((s) => typeof s.top.rpe === "number" && s.top.rpe > s.planTop.rpeCap);
+      const targetWeek = Math.min(ps.clamped + 1, PROGRAM_PLAN.totalWeeks);
+      if (bothOver && !(adjustments[String(targetWeek)] || {}).scale) {
+        insights.push({
+          kind: "warn",
+          title: "Two sessions in a row over target RPE",
+          body: "The sheet's fatigue rule: pull next week's loads 5% and let recovery catch up. Losing a small step now beats grinding into a stall.",
+          apply: { week: targetWeek, set: { scale: 0.95 } },
+          applyLabel: `Pull wk ${targetWeek} loads 5%`,
+        });
+      }
+    }
+
+    // Wed pressing auto-drop check (this program week).
+    const weekEnd = ps.weekStartMs + 7 * 86400000;
+    const wed = state.workouts.find((w) => {
+      const t = new Date(w.date).getTime();
+      return w.routineId === "seed-wed-secondary-press-arms" && t >= ps.weekStartMs && t < weekEnd;
+    });
+    if (wed) {
+      let topRpe = null;
+      for (const e of wed.exercises) {
+        if (!["close-grip-bench-press", "incline-barbell-bench-press"].includes(e.exerciseId)) continue;
+        for (const s of e.sets) {
+          if (s.completed && !s.isWarmup && typeof s.rpe === "number") topRpe = Math.max(topRpe ?? 0, s.rpe);
+        }
+      }
+      if (topRpe != null && topRpe > row.rpeCap + 1) {
+        insights.push({
+          kind: "warn",
+          title: "Wed pressing ran heavy — auto-drop rule",
+          body: ps.clamped >= 11 && ps.clamped <= 15
+            ? `Pressing hit RPE ${topRpe} (target +1 over). Drop Friday's pump work but keep the 4×3 speed bench. Flagged again next week → cut triceps volume ~20%.`
+            : `Pressing hit RPE ${topRpe} (target +1 over). Skip Friday entirely this week. Flagged again next week → cut triceps volume ~20%.`,
+        });
+      }
+    }
+
+    // Block-transition heads-up for next week.
+    if (ps.clamped < PROGRAM_PLAN.totalWeeks) {
+      const next = planWeekRow(ps.clamped + 1);
+      if (next.block !== row.block) {
+        const COPY = {
+          Deload: `Deload next week — ${next.bench.load}/${next.squat.load} top sets at RPE ≤ 6, 50% accessory sets, no PRs. Take it seriously; week ${ps.clamped + 5 <= 16 ? "after builds on it" : "16 is coming"}.`,
+          Strength: "Strength block starts next week — caps rise to RPE 8.5, arms drop to 14/16 weekly sets.",
+          Bridge: "Bridge block next week — single practice starts (heavy 1×1 plus 3×5 back-offs) and Friday speed bench becomes REQUIRED.",
+          Peak: "Peaking next week — volume −50%, accessories −60%. The strength is built; now you're just sharpening.",
+          Test: `Test week next week — openers ${PROGRAM_PLAN.attemptPlan.bench[0]} bench / ${PROGRAM_PLAN.attemptPlan.squat[0]} squat. Squat first, then bench. Nothing hard inside 72 h, carb up, sleep is programming.`,
+        };
+        if (COPY[next.block]) insights.push({ kind: "info", title: `${next.block} — week ${ps.clamped + 1}`, body: COPY[next.block] });
+      }
+    }
+
+    // Adherence flag once the week is mostly gone.
+    const stats = coachWeekStats();
+    if (stats && stats.dayOfWeek >= 4 && stats.sessionsDone < stats.sessionsRequired - 1) {
+      insights.push({
+        kind: "warn",
+        title: `${stats.sessionsDone} of ${stats.sessionsRequired} sessions logged this week`,
+        body: "The split needs Sun/Mon/Wed/Thu minimum. If life got in the way, prioritize the two comp days — they carry the cycle.",
+      });
+    }
+    if (stats && !stats.trimmed && stats.dayOfWeek >= 4 && stats.biceps.done < stats.biceps.lo) {
+      insights.push({
+        kind: "info",
+        title: `Biceps at ${stats.biceps.done} of ${stats.biceps.lo}–${stats.biceps.hi} weekly sets`,
+        body: "Arm volume is guaranteed Sun/Wed/Thu in this program — don't leave the curls to a Friday that may not happen.",
+      });
+    }
+
+    // RPE logging is what powers the cap checks.
+    if (!state.settings.showRpe) {
+      insights.push({
+        kind: "info",
+        title: "Turn on RPE logging",
+        body: "Settings → Workout → Log RPE per set. The coach's cap checks, repeat-the-load calls, and fatigue rule all run off your logged top-set RPE.",
+      });
+    }
+
+    const order = { suggest: 0, warn: 1, good: 2, info: 3 };
+    return insights.sort((a, b) => order[a.kind] - order[b.kind]);
+  }
+
+  function applyCoachSuggestion(week, set) {
+    const adjustments = state.settings.programAdjustments || (state.settings.programAdjustments = {});
+    adjustments[String(week)] = { ...(adjustments[String(week)] || {}), ...set };
+    saveSettings();
+    syncSeedRoutinesToPlan();
+    showToast("Applied — routine targets updated");
+    render();
+  }
+
+  const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  // Home "This week" program card: week/block, today's session + main-lift
+  // target, cycle progress, and the single most actionable coach insight.
+  function renderProgramCardHtml() {
+    const ps = programState();
+    if (!ps) return "";
+    if (ps.post) {
+      return `
+        <div class="card card-tap" data-action="go-analytics">
+          <div style="font-weight:700;">Cycle complete 🎉</div>
+          <div class="small muted" style="margin-top:4px;">16 weeks done. Log your test maxes, then run the 6–8 wk arm block before the next cycle.</div>
+        </div>`;
+    }
+    const row = ps.row;
+    const today = new Date().getDay();
+    const dayInfo = PLAN_DAYS.find((d) => d.dow === today);
+    let todayHtml;
+    if (dayInfo) {
+      const targets = planRoutineTargets(ps.clamped, state.settings.programAdjustments);
+      const t = targets[dayInfo.routineId] || {};
+      const firstId = Object.keys(t)[0];
+      const main = firstId ? t[firstId] : null;
+      const mainEx = firstId ? exerciseById(firstId) : null;
+      todayHtml = `
+        <div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · ${escapeHtml(dayInfo.label)}</div>
+        ${main && mainEx ? `<div class="small muted" style="margin-top:2px;">${escapeHtml(mainEx.name)} ${summarizeSets(main.sets)}${row.block !== "Test" ? ` · RPE ≤ ${row.rpeCap}` : ""}</div>` : ""}`;
+    } else {
+      todayHtml = `<div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · Rest day</div>
+        <div class="small muted" style="margin-top:2px;">Recovery is part of the program. Eat, sleep, walk.</div>`;
+    }
+    const headline = coachInsights().find((i) => i.kind !== "info");
+    const pct = Math.round((ps.clamped / PROGRAM_PLAN.totalWeeks) * 100);
+    return `
+      <div class="section">
+        <div class="row" style="margin-bottom:8px;">
+          <h3 style="margin:0;">Program</h3>
+          <span class="badge badge-accent">Wk ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} · ${row.block}</span>
+        </div>
+        <div class="card card-tap" data-action="go-analytics">
+          <div class="muscle-vol-track" style="margin-bottom:10px;"><span class="muscle-vol-fill" style="width:${pct}%"></span></div>
+          ${todayHtml}
+          ${row.note ? `<div class="tiny muted" style="margin-top:6px;">${escapeHtml(row.note)}</div>` : ""}
+          ${headline ? `
+            <div class="suggest-card" style="margin-top:10px; margin-bottom:0;">
+              <span class="suggest-icon">${headline.kind === "good" ? "▲" : headline.kind === "warn" ? "!" : "→"}</span>
+              <div><div class="suggest-title">${escapeHtml(headline.title)}</div><div class="tiny muted">${escapeHtml(headline.body)}</div></div>
+            </div>` : ""}
+        </div>
+      </div>
+    `;
+  }
+
+  // The full coach panel on Analytics: goal trajectory vs the week-16 bands,
+  // this week's adherence, and every insight (with Apply where offered).
+  function renderCoachSectionHtml() {
+    const ps = programState();
+    if (!ps) return "";
+    const insights = coachInsights();
+    const stats = coachWeekStats();
+    const STATUS_LABELS = { "ahead": "Ahead of pace", "on-pace": "On pace", "behind": "Behind pace", "building": "Building data" };
+    const STATUS_BADGE = { "ahead": "badge-success", "on-pace": "badge-success", "behind": "badge-effort", "building": "" };
+    const goalRows = ps.post ? "" : ["bench", "squat"].map((liftKey) => {
+      const tr = liftTrajectory(liftKey);
+      if (!tr) return "";
+      const goalTxt = `${tr.goal.lo}–${tr.goal.hi}`;
+      if (tr.current == null) {
+        return `
+          <div class="row" style="padding:6px 0;">
+            <div><div class="row-title">${liftKeyName(liftKey)}</div><div class="tiny muted">Goal ${goalTxt} lb · log comp sessions to track pace</div></div>
+            <span class="badge">No data yet</span>
+          </div>`;
+      }
+      return `
+        <div class="row" style="padding:6px 0; align-items:flex-start;">
+          <div>
+            <div class="row-title">${liftKeyName(liftKey)} · e1RM ${Math.round(tr.current)}</div>
+            <div class="tiny muted">Goal ${goalTxt} by wk 16 (from ${tr.base})${tr.projected ? ` · projecting ≈ ${Math.round(tr.projected)}` : ""}</div>
+          </div>
+          <span class="badge ${STATUS_BADGE[tr.status]}">${STATUS_LABELS[tr.status]}</span>
+        </div>`;
+    }).join("");
+
+    return `
+      <div class="section">
+        <div class="row" style="margin-bottom:8px;">
+          <h3 style="margin:0;">Coach</h3>
+          <span class="badge badge-accent">Wk ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} · ${ps.row.block}</span>
+        </div>
+        ${goalRows ? `<div class="card">${goalRows}<div class="tiny muted" style="margin-top:6px;">Estimated 1RM from your best recent comp sets (Epley, RPE-adjusted), vs. a straight-line pace from your first logged cycle sessions to the week-16 goal gain. Deload/peak dips are expected and not scored against you.</div></div>` : ""}
+        ${stats ? `
+          <div class="card">
+            <div class="muscle-vol-row">
+              <span class="muscle-vol-name">Sessions</span>
+              <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.sessionsDone / stats.sessionsRequired))}%"></span></span>
+              <span class="muscle-vol-count">${stats.sessionsDone}/${stats.sessionsRequired}</span>
+            </div>
+            <div class="muscle-vol-row">
+              <span class="muscle-vol-name">Biceps sets</span>
+              <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.biceps.done / stats.biceps.hi))}%"></span></span>
+              <span class="muscle-vol-count">${stats.biceps.done}/${stats.biceps.lo}–${stats.biceps.hi}</span>
+            </div>
+            <div class="muscle-vol-row">
+              <span class="muscle-vol-name">Triceps sets</span>
+              <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.triceps.done / stats.triceps.hi))}%"></span></span>
+              <span class="muscle-vol-count">${stats.triceps.done}/${stats.triceps.lo}–${stats.triceps.hi}</span>
+            </div>
+            <div class="tiny muted" style="margin-top:6px;">This program week (Sun–Sat)${stats.trimmed ? " · peak week — arm volume is intentionally trimmed" : ""}${ps.row.block === "Deload" ? " · deload — arm targets halved" : ""}.</div>
+          </div>` : ""}
+        ${insights.map((i) => `
+          <div class="suggest-card ${i.kind === "good" ? "" : "suggest-hold"}">
+            <span class="suggest-icon">${i.kind === "good" ? "▲" : i.kind === "warn" ? "!" : i.kind === "suggest" ? "↺" : "→"}</span>
+            <div style="flex:1; min-width:0;">
+              <div class="suggest-title">${escapeHtml(i.title)}</div>
+              <div class="tiny muted">${escapeHtml(i.body)}</div>
+              ${i.apply ? `<button class="btn btn-sm btn-accent" style="margin-top:8px;" data-action="coach-apply" data-week="${i.apply.week}" data-set="${encodeURIComponent(JSON.stringify(i.apply.set))}">${escapeHtml(i.applyLabel || "Apply")}</button>` : ""}
+            </div>
+          </div>`).join("")}
+      </div>
+    `;
   }
 
   // ---------- Effort scoring ----------
@@ -1172,6 +1643,8 @@
           </div>
         </div>` : ""}
 
+      ${renderProgramCardHtml()}
+
       <button class="btn btn-primary" data-action="start-empty" style="margin-bottom:16px;">+ Start empty workout</button>
 
       <div class="section">
@@ -1519,6 +1992,7 @@
     if (state.workouts.length === 0) {
       appEl.innerHTML = `
         <div class="topbar"><h1>Analytics</h1></div>
+        ${renderCoachSectionHtml()}
         ${emptyStateHtml("No data yet", "Finish a few workouts and your progress and stimulus analytics will build up here.", "workouts")}
       `;
       return;
@@ -1557,6 +2031,8 @@
         <div class="stat-card"><div class="stat-label">Avg effort</div><div class="stat-value">${avgEffort != null ? avgEffort + "%" : "–"}</div></div>
         <div class="stat-card"><div class="stat-label">PRs · 4wk</div><div class="stat-value">${prs28}</div></div>
       </div>
+
+      ${renderCoachSectionHtml()}
 
       ${lifts.length ? `
         <div class="section">
@@ -1966,6 +2442,34 @@
         </div>
       </div>
 
+      ${(() => {
+        const ps = programState();
+        const adj = s.programAdjustments || {};
+        const adjWeeks = Object.keys(adj);
+        return `
+      <div class="section">
+        <h3>Program</h3>
+        <div class="card">
+          <div class="row">
+            <span>Cycle start (week-1 Sunday)</span>
+            <input type="date" data-action="set-program-start" value="${s.programStartDate || ""}"
+              style="border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface); font-weight:700;" />
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">
+            ${ps ? (ps.post
+              ? "The 16-week cycle is complete."
+              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}). Main-lift targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week.`)
+              : "Set the Sunday your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
+          </div>
+          ${adjWeeks.length ? `
+          <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+            <span class="small">Applied adjustments: wk ${adjWeeks.join(", wk ")}</span>
+            <button class="btn btn-sm" data-action="clear-program-adjustments">Clear</button>
+          </div>` : ""}
+        </div>
+      </div>`;
+      })()}
+
       <div class="section">
         <h3>Workout</h3>
         <div class="card">
@@ -2209,6 +2713,7 @@
           <button class="ex-drag-handle" data-exidx="${exIdx}" aria-label="Press and hold to reorder">${ICONS.grip}</button>
           <div class="ex-header-main">
             <div class="ex-title">${ssChip}${escapeHtml(ex.name)}</div>
+            <div class="ex-setcount">${ex.sets.length} set${ex.sets.length === 1 ? "" : "s"}</div>
             ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
             ${sugg && sugg.bumped ? `<div class="ex-suggest">▲ Suggested: ${weightToDisplay(sugg.next)} ${u} <span class="muted">(last ${weightToDisplay(sugg.last)}×${sugg.reps})</span></div>` : ""}
           </div>
@@ -2476,10 +2981,25 @@
     const el = blocks[exIdx];
     if (!el) return;
     if (navigator.vibrate) { try { navigator.vibrate(12); } catch (_) {} }
+
+    // Collapse every card down to just its header while dragging (set
+    // tables hidden, a "N sets" chip shown instead), so reordering a long
+    // workout means shuffling compact rows instead of giant tables.
+    const beforeTop = el.getBoundingClientRect().top;
+    list.classList.add("ex-drag-collapse");
+    // Keep the grabbed card's header under the finger: the cards above it
+    // just shrank, so first restore its on-screen position via scroll,
+    // then absorb whatever scroll couldn't cover (top-of-list clamp) into
+    // a standing transform offset applied on top of the live drag delta.
+    const afterTop = el.getBoundingClientRect().top;
+    appEl.scrollTop += afterTop - beforeTop;
+    const baseDy = beforeTop - el.getBoundingClientRect().top;
+
     const metrics = blocks.map((b) => ({ top: b.offsetTop, height: b.offsetHeight }));
     blocks.forEach((b) => { b.style.transition = "transform 0.15s cubic-bezier(0.22, 1, 0.36, 1)"; });
     el.style.transition = "none";
     el.classList.add("ex-dragging");
+    if (baseDy) el.style.transform = `translateY(${baseDy}px)`;
     exDragCtx = {
       exIdx,
       el,
@@ -2490,6 +3010,7 @@
       pointerStartY,
       startScrollTop: appEl.scrollTop,
       currentIndex: exIdx,
+      baseDy,
     };
     document.addEventListener("pointermove", onExerciseDragMove);
     document.addEventListener("pointerup", onExerciseDragEnd);
@@ -2501,7 +3022,7 @@
     if (!ctx || e.pointerId !== ctx.pointerId) return;
     e.preventDefault();
     const scrollDelta = appEl.scrollTop - ctx.startScrollTop;
-    const dy = e.clientY - ctx.pointerStartY + scrollDelta;
+    const dy = e.clientY - ctx.pointerStartY + scrollDelta + ctx.baseDy;
     ctx.el.style.transform = `translateY(${dy}px)`;
 
     // Auto-scroll the workout list when dragging near the top/bottom edge
@@ -2522,7 +3043,7 @@
 
     if (newIndex !== ctx.currentIndex) {
       ctx.currentIndex = newIndex;
-      const draggedHeight = draggedMetric.height + 12; // include block's margin-bottom
+      const draggedHeight = draggedMetric.height + 8; // include the collapsed block's margin-bottom
       ctx.blocks.forEach((b, i) => {
         if (i === ctx.exIdx) return;
         let shift = 0;
@@ -2545,6 +3066,7 @@
       b.style.transform = "";
     });
     ctx.el.classList.remove("ex-dragging");
+    ctx.list.classList.remove("ex-drag-collapse");
 
     const finalIndex = ctx.currentIndex;
     exDragCtx = null;
@@ -2555,6 +3077,11 @@
       arr.splice(finalIndex, 0, moved);
       saveActiveWorkout();
       render();
+      // Cards just re-expanded to full size — keep the moved exercise on screen.
+      const nb = document.querySelectorAll("#workout-exercises > .exercise-block")[finalIndex];
+      if (nb && nb.scrollIntoView) nb.scrollIntoView({ block: "nearest" });
+    } else if (ctx.el.isConnected && ctx.el.scrollIntoView) {
+      ctx.el.scrollIntoView({ block: "nearest" });
     }
   }
 
@@ -2585,6 +3112,20 @@
         if (homeChartMetric !== t.dataset.metric) { homeChartMetric = t.dataset.metric; render(); }
         break;
       case "complete-done": navigate("home"); break;
+      case "go-analytics": navigate("analytics"); break;
+      case "coach-apply": {
+        let set = null;
+        try { set = JSON.parse(decodeURIComponent(t.dataset.set)); } catch (err) { break; }
+        applyCoachSuggestion(parseInt(t.dataset.week, 10), set);
+        break;
+      }
+      case "clear-program-adjustments":
+        state.settings.programAdjustments = {};
+        saveSettings();
+        syncSeedRoutinesToPlan();
+        showToast("Adjustments cleared");
+        render();
+        break;
       case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
       case "history-tab": navigate("history", { tab: t.dataset.tab }); break;
@@ -2756,6 +3297,13 @@
       const file = t.files[0];
       t.value = ""; // reset so re-selecting the same file still fires change
       importData(file);
+    } else if (t.dataset.action === "set-program-start") {
+      // Committed on change (date pickers fire change, not per-keystroke input).
+      state.settings.programStartDate = t.value || null;
+      saveSettings();
+      syncSeedRoutinesToPlan();
+      showToast(t.value ? "Program start updated" : "Program tracking off");
+      render();
     } else if (t.dataset.action === "set-bodyweight") {
       // Log a dated bodyweight entry on commit (blur/enter), not per keystroke.
       if (t.value === "") return;

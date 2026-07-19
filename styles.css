@@ -534,6 +534,36 @@ input[type="number"] {
   background: var(--bg);
   opacity: 0.97;
 }
+/* While a drag is in progress every exercise card collapses to just its
+   header (set tables + add-set hidden, a quiet "N sets" chip shown
+   instead), so reordering a long workout means shuffling compact rows
+   rather than flinging full-height tables around. Applied to the list by
+   the drag JS on pick-up, removed on drop. */
+.ex-setcount { display: none; }
+#workout-exercises.ex-drag-collapse .exercise-block > .set-table,
+#workout-exercises.ex-drag-collapse .exercise-block > [data-action="add-set"],
+#workout-exercises.ex-drag-collapse .exercise-block .ex-note,
+#workout-exercises.ex-drag-collapse .exercise-block .ex-suggest {
+  display: none;
+}
+#workout-exercises.ex-drag-collapse .exercise-block { margin-bottom: 8px; }
+#workout-exercises.ex-drag-collapse .exercise-block .ex-header { margin-bottom: 0; }
+#workout-exercises.ex-drag-collapse .ex-setcount {
+  display: block;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-medium);
+  color: var(--text-3);
+}
+#workout-exercises.ex-drag-collapse .exercise-block:not(.ex-dragging) {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 4px 12px;
+}
+#workout-exercises.ex-drag-collapse .exercise-block.ex-dragging {
+  border: 1px solid var(--border-strong);
+  padding: 4px 12px;
+}
 .exercise-block .ex-note {
   font-size: var(--fs-xs);
   color: var(--accent);
