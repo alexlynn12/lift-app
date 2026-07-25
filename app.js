@@ -152,6 +152,20 @@
       const idx = exerciseMenuIndex;
       closeExerciseMenu();
       openReplaceExercisePicker(idx);
+    } else if (t.dataset.action === "menu-remove") {
+      // Removal lives here (not as an always-visible red button on every
+      // exercise card) so the workout screen stays calm and a stray tap
+      // can't wipe an exercise mid-session.
+      const idx = exerciseMenuIndex;
+      const ctx = exerciseMenuContext;
+      closeExerciseMenu();
+      if (ctx === "workout" && state.activeWorkout) {
+        state.activeWorkout.exercises.splice(idx, 1);
+        saveActiveWorkout();
+      } else if (renderRoutineEdit._draft) {
+        renderRoutineEdit._draft.exercises.splice(idx, 1);
+      }
+      render();
     }
   });
 
@@ -682,6 +696,11 @@
       post: week > PROGRAM_PLAN.totalWeeks,
       row: planWeekRow(clamped),
       weekStartMs: planWeekStartMs(startDate, week),
+      weekEndMs: planWeekEndMs(startDate, week),
+      // The vacation-adjusted calendar: what TODAY actually is (training day,
+      // rest, travel, vacation or test day) rather than a fixed weekday map.
+      day: planDayFor(startDate, Date.now()),
+      dateRange: planWeekDateRangeText(startDate, clamped),
     };
   }
 
@@ -701,7 +720,15 @@
         const spec = t[ex.exerciseId];
         if (!spec) continue;
         delete t[ex.exerciseId]; // only the first matching exercise per routine takes the target
-        const newSets = spec.sets.map((s) => ({ weight: s.weight, reps: s.reps, isWarmup: false }));
+        // Accessories carry their load over (double progression lives in the
+        // logged weight, not the sheet) — only sets and reps get rewritten.
+        const carried = ex.sets.filter((s) => !s.isWarmup).map((s) => s.weight);
+        const lastKnown = carried.length ? carried[carried.length - 1] : "";
+        const newSets = spec.sets.map((s, i) => ({
+          weight: spec.keepWeight ? (carried[i] !== undefined ? carried[i] : lastKnown) : s.weight,
+          reps: s.reps,
+          isWarmup: false,
+        }));
         if (ex.note !== spec.note || JSON.stringify(ex.sets) !== JSON.stringify(newSets)) {
           ex.note = spec.note;
           ex.sets = newSets;
@@ -822,7 +849,7 @@
     const ps = programState();
     if (!ps || ps.post) return null;
     const weekStart = ps.weekStartMs;
-    const weekEnd = weekStart + 7 * 86400000;
+    const weekEnd = ps.weekEndMs;
     const days = new Set();
     let biceps = 0, triceps = 0;
     for (const w of state.workouts) {
@@ -837,14 +864,20 @@
         else if (ex.muscle === "Triceps") triceps += working;
       }
     }
-    const required = planRequiredSessions(ps.clamped);
-    const dayOfWeek = Math.min(6, Math.max(0, Math.floor((Date.now() - weekStart) / 86400000)));
+    const required = planRequiredSessions(ps.clamped, ps.startDate);
+    const weekLen = planWeekLength(ps.clamped);
+    const dayIndex = Math.min(weekLen - 1, Math.max(0, Math.floor((Date.now() - weekStart) / 86400000)));
+    // Fraction of the week elapsed — the adherence flag can't key off "day 4"
+    // any more now that a week can run 6, 8 or 15 days.
+    const weekProgress = weekLen <= 1 ? 1 : dayIndex / (weekLen - 1);
     const arm = PROGRAM_PLAN.armSets;
     const scale = ps.row.block === "Deload" ? 0.5 : 1;
     return {
       sessionsDone: days.size,
       sessionsRequired: required,
-      dayOfWeek,
+      dayOfWeek: dayIndex,
+      weekProgress,
+      weekLen,
       trimmed: ps.row.block === "Peak" || ps.row.block === "Test",
       biceps: { done: biceps, lo: Math.round(arm.biceps[0] * scale), hi: Math.round(arm.biceps[1] * scale) },
       triceps: { done: triceps, lo: Math.round(arm.triceps[0] * scale), hi: Math.round(arm.triceps[1] * scale) },
@@ -927,7 +960,7 @@
     }
 
     // Wed pressing auto-drop check (this program week).
-    const weekEnd = ps.weekStartMs + 7 * 86400000;
+    const weekEnd = ps.weekEndMs;
     const wed = state.workouts.find((w) => {
       const t = new Date(w.date).getTime();
       return w.routineId === "seed-wed-secondary-press-arms" && t >= ps.weekStartMs && t < weekEnd;
@@ -951,14 +984,42 @@
       }
     }
 
+    // Calendar heads-ups the vacation shift creates.
+    if (ps.day && ps.day.kind === "rest" && ps.day.note) {
+      insights.push({ kind: "info", title: `Today: ${ps.day.label}`, body: ps.day.note });
+    }
+    if (ps.clamped === 9) {
+      insights.push({
+        kind: "info",
+        title: "Week 9 is shifted — comp lifts land on the weekend",
+        body: "Heavy bench Sat Jul 25, squat primary Sun Jul 26, Mon Jul 27 off for the event. Both comp lifts are banked before the rest day, so nothing is lost. Next week's deload IS the trip.",
+      });
+    }
+    if (ps.clamped === 10) {
+      insights.push({
+        kind: "warn",
+        title: "This deload is your vacation — don't do both",
+        body: "Three light sessions (Aug 2/3/5) at RPE ≤ 6 and half the accessory sets, then off Aug 6–16. A gym deload stacked on 11 days off is two deloads. Walk and eat; don't go find a gym.",
+      });
+    }
+    if (ps.clamped === 11) {
+      insights.push({
+        kind: "warn",
+        title: "Re-entry week — cap everything at RPE 7.5",
+        body: "You're back after ~11 days off: rusty, not weaker. Own the back-offs, lighten or skip the heavy single until bar speed is normal. Roll into week-12 loads only if the singles moved right — otherwise repeat this week. You have the slack.",
+      });
+    }
+
     // Block-transition heads-up for next week.
     if (ps.clamped < PROGRAM_PLAN.totalWeeks) {
       const next = planWeekRow(ps.clamped + 1);
       if (next.block !== row.block) {
         const COPY = {
-          Deload: `Deload next week — ${next.bench.load}/${next.squat.load} top sets at RPE ≤ 6, 50% accessory sets, no PRs. Take it seriously; week ${ps.clamped + 5 <= 16 ? "after builds on it" : "16 is coming"}.`,
+          Deload: ps.clamped === 9
+            ? `Deload next week — and it's your trip. Light Sun/Mon/Wed (Aug 2/3/5) at ${next.bench.load}/${next.squat.load}, RPE ≤ 6, then fly Thursday. The vacation replaces the gym deload.`
+            : `Deload next week — ${next.bench.load}/${next.squat.load} top sets at RPE ≤ 6, 50% accessory sets, no PRs. Take it seriously; week ${ps.clamped + 5 <= 16 ? "after builds on it" : "16 is coming"}.`,
           Strength: "Strength block starts next week — caps rise to RPE 8.5, arms drop to 14/16 weekly sets.",
-          Bridge: "Bridge block next week — single practice starts (heavy 1×1 plus 3×5 back-offs) and Friday speed bench becomes REQUIRED.",
+          Bridge: "Bridge block next week — single practice starts (heavy 1×1 plus 3×5 back-offs) and Friday speed bench becomes REQUIRED. Training resumes Mon Aug 17 at RPE 7.5 caps.",
           Peak: "Peaking next week — volume −50%, accessories −60%. The strength is built; now you're just sharpening.",
           Test: `Test week next week — openers ${PROGRAM_PLAN.attemptPlan.bench[0]} bench / ${PROGRAM_PLAN.attemptPlan.squat[0]} squat. Squat first, then bench. Nothing hard inside 72 h, carb up, sleep is programming.`,
         };
@@ -968,14 +1029,15 @@
 
     // Adherence flag once the week is mostly gone.
     const stats = coachWeekStats();
-    if (stats && stats.dayOfWeek >= 4 && stats.sessionsDone < stats.sessionsRequired - 1) {
+    const lateInWeek = stats && stats.weekProgress >= 0.6;
+    if (stats && lateInWeek && row.block !== "Deload" && stats.sessionsDone < stats.sessionsRequired - 1) {
       insights.push({
         kind: "warn",
         title: `${stats.sessionsDone} of ${stats.sessionsRequired} sessions logged this week`,
-        body: "The split needs Sun/Mon/Wed/Thu minimum. If life got in the way, prioritize the two comp days — they carry the cycle.",
+        body: "If life got in the way, prioritize the two comp days — they carry the cycle. The accessory work is what you drop, not the barbell work.",
       });
     }
-    if (stats && !stats.trimmed && stats.dayOfWeek >= 4 && stats.biceps.done < stats.biceps.lo) {
+    if (stats && !stats.trimmed && lateInWeek && stats.biceps.done < stats.biceps.lo) {
       insights.push({
         kind: "info",
         title: `Biceps at ${stats.biceps.done} of ${stats.biceps.lo}–${stats.biceps.hi} weekly sets`,
@@ -1021,17 +1083,35 @@
     }
     const row = ps.row;
     const today = new Date().getDay();
-    const dayInfo = PLAN_DAYS.find((d) => d.dow === today);
+    // The calendar decides what today is — the vacation shift moves sessions
+    // off their usual weekdays (bench to Saturday in wk 9, everything to
+    // Mon–Fri in the wk 11 re-entry) and blanks out the trip entirely.
+    const day = ps.day;
     let todayHtml;
-    if (dayInfo) {
+    if (day && day.routineId) {
       const targets = planRoutineTargets(ps.clamped, state.settings.programAdjustments);
-      const t = targets[dayInfo.routineId] || {};
-      const firstId = Object.keys(t)[0];
-      const main = firstId ? t[firstId] : null;
-      const mainEx = firstId ? exerciseById(firstId) : null;
+      const ids = [day.routineId, day.extraRoutineId].filter(Boolean);
+      const lines = ids.map((rid) => {
+        const t = targets[rid] || {};
+        const firstId = Object.keys(t).find((k) => !t[k].keepWeight) || Object.keys(t)[0];
+        const main = firstId ? t[firstId] : null;
+        const mainEx = firstId ? exerciseById(firstId) : null;
+        return main && mainEx
+          ? `<div class="small muted" style="margin-top:2px;">${escapeHtml(mainEx.name)} ${summarizeSets(main.sets)}${row.block !== "Test" ? ` · RPE ≤ ${row.rpeCap}` : ""}</div>`
+          : "";
+      }).join("");
       todayHtml = `
-        <div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · ${escapeHtml(dayInfo.label)}</div>
-        ${main && mainEx ? `<div class="small muted" style="margin-top:2px;">${escapeHtml(mainEx.name)} ${summarizeSets(main.sets)}${row.block !== "Test" ? ` · RPE ≤ ${row.rpeCap}` : ""}</div>` : ""}`;
+        <div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · ${escapeHtml(day.label)}</div>
+        ${lines}
+        ${day.note ? `<div class="tiny muted" style="margin-top:4px;">${escapeHtml(day.note)}</div>` : ""}`;
+    } else if (day) {
+      const COPY = {
+        off: "No lifting. Walk, eat, sleep — this is the part of the program that grows you.",
+        travel: "Travel day. Nothing to log.",
+        rest: "Recovery is part of the program. Eat, sleep, walk.",
+      };
+      todayHtml = `<div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · ${escapeHtml(day.label)}</div>
+        <div class="small muted" style="margin-top:2px;">${escapeHtml(day.note || COPY[day.kind] || COPY.rest)}</div>`;
     } else {
       todayHtml = `<div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · Rest day</div>
         <div class="small muted" style="margin-top:2px;">Recovery is part of the program. Eat, sleep, walk.</div>`;
@@ -1044,6 +1124,7 @@
           <h3 style="margin:0;">Program</h3>
           <span class="badge badge-accent">Wk ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} · ${row.block}</span>
         </div>
+        <div class="tiny muted" style="margin:-4px 0 8px;">${escapeHtml(ps.dateRange)}</div>
         <div class="card card-tap" data-action="go-analytics">
           <div class="muscle-vol-track" style="margin-bottom:10px;"><span class="muscle-vol-fill" style="width:${pct}%"></span></div>
           ${todayHtml}
@@ -1075,7 +1156,7 @@
         return `
           <div class="row" style="padding:6px 0;">
             <div><div class="row-title">${liftKeyName(liftKey)}</div><div class="tiny muted">Goal ${goalTxt} lb · log comp sessions to track pace</div></div>
-            <span class="badge">No data yet</span>
+            <span class="badge badge-muted">No data yet</span>
           </div>`;
       }
       return `
@@ -1100,19 +1181,19 @@
             <div class="muscle-vol-row">
               <span class="muscle-vol-name">Sessions</span>
               <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.sessionsDone / stats.sessionsRequired))}%"></span></span>
-              <span class="muscle-vol-count">${stats.sessionsDone}/${stats.sessionsRequired}</span>
+              <span class="muscle-vol-count">${stats.sessionsDone} of ${stats.sessionsRequired}</span>
             </div>
             <div class="muscle-vol-row">
-              <span class="muscle-vol-name">Biceps sets</span>
+              <span class="muscle-vol-name">Biceps</span>
               <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.biceps.done / stats.biceps.hi))}%"></span></span>
-              <span class="muscle-vol-count">${stats.biceps.done}/${stats.biceps.lo}–${stats.biceps.hi}</span>
+              <span class="muscle-vol-count">${stats.biceps.done} of ${stats.biceps.lo}–${stats.biceps.hi}</span>
             </div>
             <div class="muscle-vol-row">
-              <span class="muscle-vol-name">Triceps sets</span>
+              <span class="muscle-vol-name">Triceps</span>
               <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.triceps.done / stats.triceps.hi))}%"></span></span>
-              <span class="muscle-vol-count">${stats.triceps.done}/${stats.triceps.lo}–${stats.triceps.hi}</span>
+              <span class="muscle-vol-count">${stats.triceps.done} of ${stats.triceps.lo}–${stats.triceps.hi}</span>
             </div>
-            <div class="tiny muted" style="margin-top:6px;">This program week (Sun–Sat)${stats.trimmed ? " · peak week — arm volume is intentionally trimmed" : ""}${ps.row.block === "Deload" ? " · deload — arm targets halved" : ""}.</div>
+            <div class="tiny muted" style="margin-top:6px;">Sessions and weekly arm sets, program week ${ps.clamped} (${escapeHtml(ps.dateRange)})${stats.trimmed ? " · peak week — arm volume is intentionally trimmed" : ""}${ps.row.block === "Deload" ? " · deload — arm targets halved, and the trip is the rest of it" : ""}.</div>
           </div>` : ""}
         ${insights.map((i) => `
           <div class="suggest-card ${i.kind === "good" ? "" : "suggest-hold"}">
@@ -1627,6 +1708,36 @@
     `;
   }
 
+  // Home's routine list in training-week order (Sun → Mon → Wed → Thu → Fri
+  // for the seeded program, matching the split) with today's session bubbled
+  // to the top — the list used to render in arbitrary DB order, which buried
+  // the day's actual workout mid-list. User-created routines keep their
+  // original order after the seeded ones.
+  function orderedHomeRoutines() {
+    const seedOrder = typeof PLAN_DAYS !== "undefined" ? PLAN_DAYS.map((d) => d.routineId) : [];
+    // Today's session comes from the calendar (which honors the vacation
+    // shift), falling back to the plain weekday map if program tracking is off.
+    const ps = programState();
+    let todayIds = [];
+    if (ps && ps.day) {
+      todayIds = [ps.day.routineId, ps.day.extraRoutineId].filter(Boolean);
+    } else if (typeof PLAN_DAYS !== "undefined") {
+      const todayDow = new Date().getDay();
+      const info = PLAN_DAYS.find((d) => d.dow === todayDow);
+      if (info) todayIds = [info.routineId];
+    }
+    const entries = state.routines.map((routine, i) => ({ routine, i, isToday: todayIds.includes(routine.id) }));
+    entries.sort((a, b) => {
+      if (a.isToday !== b.isToday) return a.isToday ? -1 : 1;
+      const ai = seedOrder.indexOf(a.routine.id), bi = seedOrder.indexOf(b.routine.id);
+      if (ai !== -1 && bi !== -1) return ai - bi;
+      if (ai !== -1) return -1;
+      if (bi !== -1) return 1;
+      return a.i - b.i;
+    });
+    return entries;
+  }
+
   function renderHome() {
     const last = state.workouts[0];
     appEl.innerHTML = `
@@ -1652,13 +1763,13 @@
           <h3 style="margin:0;">Routines</h3>
         </div>
         ${state.routines.length === 0 ? emptyStateHtml("No routines yet", "Create one to pre-load your sets each session.", "routines") : ""}
-        ${state.routines.map((r) => {
+        ${orderedHomeRoutines().map(({ routine: r, isToday }) => {
           const lastEffort = lastEffortForRoutine(r.id);
           return `
-          <div class="card card-tap" data-action="open-routine" data-id="${r.id}">
+          <div class="card card-tap" data-action="open-routine" data-id="${r.id}" ${isToday ? `style="border-color:var(--accent);"` : ""}>
             <div class="row">
               <div>
-                <div style="font-weight:700;">${escapeHtml(r.name)}</div>
+                <div style="font-weight:700;">${escapeHtml(r.name)}${isToday ? ` <span class="badge badge-accent" style="margin-left:4px; vertical-align:2px;">Today</span>` : ""}</div>
                 <div class="small muted">${r.exercises.length} exercise${r.exercises.length === 1 ? "" : "s"}${lastEffort != null ? ` · Last: ${lastEffort}% effort` : ""}</div>
               </div>
               <button class="btn btn-sm btn-accent" data-action="start-routine" data-id="${r.id}">Start</button>
@@ -2458,9 +2569,21 @@
           <div class="tiny muted" style="margin-top:8px;">
             ${ps ? (ps.post
               ? "The 16-week cycle is complete."
-              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}). Main-lift targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week.`)
+              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. The vacation-adjusted calendar (wk 9 opens Sat Jul 25, wk 10 absorbs the Aug 6–16 trip, training resumes Mon Aug 17, test day Sun Sep 20) is built in.`)
               : "Set the Sunday your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
           </div>
+          ${ps && !ps.post ? `
+          <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+            <div class="small" style="font-weight:700; margin-bottom:6px;">This week${planCalendarRow(ps.clamped).label ? ` · ${escapeHtml(planCalendarRow(ps.clamped).label)}` : ""}</div>
+            ${planWeekDays(ps.startDate, ps.clamped).map((d) => {
+              const isToday = ps.day && d.dateMs === ps.day.dateMs;
+              const dateTxt = new Date(d.dateMs).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+              return `<div class="row" style="padding:3px 0;">
+                <span class="tiny ${isToday ? "" : "muted"}" style="${isToday ? "font-weight:700;" : ""}">${escapeHtml(dateTxt)}</span>
+                <span class="tiny ${d.routineId ? "" : "muted"}" style="${isToday ? "font-weight:700;" : ""}">${escapeHtml(d.label)}${d.required ? "" : d.routineId ? " (bonus)" : ""}</span>
+              </div>`;
+            }).join("")}
+          </div>` : ""}
           ${adjWeeks.length ? `
           <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
             <span class="small">Applied adjustments: wk ${adjWeeks.join(", wk ")}</span>
@@ -2595,7 +2718,6 @@
               </div>
               <div class="ex-header-actions">
                 <button class="ex-menu-btn" data-action="routine-ex-menu" data-index="${i}" aria-label="Exercise options">${ICONS.kebab}</button>
-                <button class="icon-btn icon-btn-danger" data-action="remove-routine-exercise" data-index="${i}">Remove</button>
               </div>
             </div>
             <table class="set-table">
@@ -2720,7 +2842,6 @@
           <div class="ex-header-actions">
             ${isBarbell && topWeight > 0 ? `<button class="ex-plate-btn" data-action="plate-calc" data-exidx="${exIdx}" aria-label="Plate calculator">${ICONS.barbell}</button>` : ""}
             <button class="ex-menu-btn" data-action="workout-ex-menu" data-exidx="${exIdx}" aria-label="Exercise options">${ICONS.kebab}</button>
-            <button class="icon-btn icon-btn-danger" data-action="remove-exercise" data-exidx="${exIdx}">Remove</button>
           </div>
         </div>
         <table class="set-table">
@@ -2734,8 +2855,8 @@
             <tr class="set-row ${s.completed ? "completed" : ""} ${isWarmup ? "warmup" : ""}">
               <td><button class="set-num set-num-btn ${tl.cls}" data-action="set-type-menu" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Set type">${tl.text}</button></td>
               <td class="set-prev">${prevLabel}</td>
-              <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="0" /></td>
-              <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="0" /></td>
+              <td><input class="set-input" inputmode="decimal" type="number" step="0.5" data-action="set-weight" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.weight === "" ? "" : weightToDisplay(s.weight)}" placeholder="—" /></td>
+              <td><input class="set-input" inputmode="numeric" type="number" step="1" data-action="set-reps" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.reps === "" ? "" : s.reps}" placeholder="—" /></td>
               ${showRpe ? `<td class="rpe-cell"><input class="set-input rpe-input" inputmode="decimal" type="number" step="0.5" min="5" max="10" data-action="set-rpe" data-exidx="${exIdx}" data-setidx="${setIdx}" value="${s.rpe == null ? "" : s.rpe}" placeholder="–" /></td>` : ""}
               <td><button class="set-check ${s.completed ? "checked" : ""}" data-action="toggle-set" data-exidx="${exIdx}" data-setidx="${setIdx}" aria-label="Mark set complete">${ICONS.check}</button></td>
             </tr>

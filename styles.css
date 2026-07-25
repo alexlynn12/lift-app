@@ -158,20 +158,20 @@ body::before {
 
 /* On navigation the whole view fades in, and its top-level blocks rise in a
    gentle stagger — a premium, composed entrance rather than one flat pop. */
-#app.app-enter { animation: appFade 0.2s ease both; }
+#app.app-enter { animation: appFade 0.12s ease both; }
 @keyframes appFade { from { opacity: 0; } to { opacity: 1; } }
 
-#app.app-enter > * { animation: riseIn 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
-#app.app-enter > *:nth-child(1) { animation-delay: 0.02s; }
-#app.app-enter > *:nth-child(2) { animation-delay: 0.06s; }
-#app.app-enter > *:nth-child(3) { animation-delay: 0.10s; }
-#app.app-enter > *:nth-child(4) { animation-delay: 0.14s; }
-#app.app-enter > *:nth-child(5) { animation-delay: 0.18s; }
-#app.app-enter > *:nth-child(6) { animation-delay: 0.21s; }
-#app.app-enter > *:nth-child(7) { animation-delay: 0.24s; }
-#app.app-enter > *:nth-child(n+8) { animation-delay: 0.27s; }
+#app.app-enter > * { animation: riseIn 0.26s cubic-bezier(0.22, 1, 0.36, 1) both; }
+#app.app-enter > *:nth-child(1) { animation-delay: 0.01s; }
+#app.app-enter > *:nth-child(2) { animation-delay: 0.03s; }
+#app.app-enter > *:nth-child(3) { animation-delay: 0.05s; }
+#app.app-enter > *:nth-child(4) { animation-delay: 0.07s; }
+#app.app-enter > *:nth-child(5) { animation-delay: 0.09s; }
+#app.app-enter > *:nth-child(6) { animation-delay: 0.10s; }
+#app.app-enter > *:nth-child(7) { animation-delay: 0.11s; }
+#app.app-enter > *:nth-child(n+8) { animation-delay: 0.12s; }
 @keyframes riseIn {
-  from { opacity: 0; transform: translateY(11px); }
+  from { opacity: 0; transform: translateY(7px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -396,6 +396,9 @@ input[type="number"] {
   left: 0;
   right: 0;
   display: flex;
+  /* Match the app's content column on wide viewports — without the cap the
+     four tabs spread across the entire desktop window. */
+  justify-content: center;
   background: var(--surface);
   border-top: 1px solid var(--border);
   padding: 8px 4px calc(8px + var(--safe-bottom));
@@ -403,6 +406,7 @@ input[type="number"] {
 }
 .tab {
   flex: 1;
+  max-width: 138px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1359,10 +1363,10 @@ input[type="number"] {
   gap: 10px;
   padding: 5px 0;
 }
-.muscle-vol-name { width: 74px; font-size: var(--fs-xs); font-weight: var(--fw-medium); }
+.muscle-vol-name { width: 74px; flex-shrink: 0; font-size: var(--fs-xs); font-weight: var(--fw-medium); }
 .muscle-vol-track { flex: 1; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
 .muscle-vol-fill { height: 100%; background: linear-gradient(90deg, var(--chart-weight), var(--accent)); border-radius: 4px; }
-.muscle-vol-count { width: 22px; text-align: right; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-2); }
+.muscle-vol-count { min-width: 22px; text-align: right; font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-2); white-space: nowrap; }
 
 /* ===== Analytics tab ===== */
 .az-stats {
