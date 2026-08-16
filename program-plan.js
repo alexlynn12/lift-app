@@ -11,9 +11,14 @@
 // CALENDAR NOTE (v2): weeks are no longer fixed Sun–Sat 7-day blocks. The
 // Aug 6–14 trip absorbs the week-10 deload, so the calendar stretches: week 9
 // opens on SATURDAY Jul 25 (heavy bench moved to the fresh day), week 10 runs
-// 15 days (3 light sessions, then the trip), and training resumes MONDAY
-// Aug 17. Every load and the block order are unchanged — only the calendar
+// 14 days (3 light sessions, then the trip), and training resumes SUNDAY
+// Aug 16. Every load and the block order are unchanged — only the calendar
 // moves. Test day shifts Sun Sep 13 → Sun Sep 20.
+//
+// 2026-08-16 revision: re-entry pulled forward one day (was Mon Aug 17). Week 11
+// is a full 7-day Sun–Sat week again, so the squat + arms double session it used
+// to need is unpacked back into the standard Sun/Mon/Wed/Thu/Fri split. Week 12
+// onward is untouched.
 
 const PROGRAM_PLAN_VERSION = 2;
 
@@ -54,8 +59,8 @@ const PROGRAM_PLAN = {
     { week: 7,  block: "Strength",    rpeCap: 8.5, bench: { sets: 4, reps: 4, pct: 83.5, load: 265 }, benchBO: null,                                  squat: { sets: 4, reps: 3, pct: 82.5, load: 395 }, squatBO: null,                                  note: "" },
     { week: 8,  block: "Strength",    rpeCap: 8.5, bench: { sets: 4, reps: 3, pct: 86.5, load: 270 }, benchBO: null,                                  squat: { sets: 3, reps: 3, pct: 85,   load: 405 }, squatBO: null,                                  note: "" },
     { week: 9,  block: "Strength",    rpeCap: 8.5, bench: { sets: 3, reps: 2, pct: 90,   load: 285 }, benchBO: null,                                  squat: { sets: 3, reps: 2, pct: 87.5, load: 420 }, squatBO: null,                                  note: "Heaviest pre-peak volume week. Vacation-adjusted: heavy bench Sat Jul 25 (fresh day), squat primary Sun Jul 26, Mon Jul 27 off for the event. Nothing is lost — both comp lifts are banked over the weekend." },
-    { week: 10, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 62,   load: 295 }, squatBO: null,                                  note: "Deload = your vacation. Three light sessions (Aug 2/3/5) at 50% accessory sets, then off Aug 6–16. Don't do a gym deload AND 11 days off — the trip is the rest." },
-    { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Mon Aug 17 after ~11 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
+    { week: 10, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 62,   load: 295 }, squatBO: null,                                  note: "Deload = your vacation. Three light sessions (Aug 2/3/5) at 50% accessory sets, then off Aug 6–15. Don't do a gym deload AND 10 days off — the trip is the rest." },
+    { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Sun Aug 16 after ~10 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
     { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "Back to the normal Sun–Fri split. Single practice at full load." },
     { week: 13, block: "Bridge",      rpeCap: 8.5, bench: { sets: 1, reps: 1, pct: 92,   load: 290 }, benchBO: { sets: 3, reps: 5, pct: 77, load: 245 }, squat: { sets: 1, reps: 1, pct: 90,   load: 430 }, squatBO: { sets: 3, reps: 5, pct: 76, load: 365 }, note: "Top sets exceed wk-9 weights. If a single beats plan at RPE ≤ 8, update the 1RM inputs — attempts recalculate." },
     { week: 14, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 435 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 375 }, note: "Volume −50%. Accessories −60%. Saturday off." },
@@ -116,9 +121,9 @@ const PROGRAM_CALENDAR = [
       { d: 7, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
     ],
   },
-  // Week 10 = the deload AND the trip. 15 days.
+  // Week 10 = the deload AND the trip. 14 days (Aug 2–15).
   {
-    week: 10, offset: 63, length: 15,
+    week: 10, offset: 63, length: 14,
     label: "Deload = vacation",
     days: [
       { d: 0,  id: "seed-sun-heavy-bench",          label: "Deload Bench",       kind: "train",  required: true,  note: "3×5 @ 62.5% ≈ 195, RPE ≤ 6. Half the accessory sets. No PRs." },
@@ -134,21 +139,23 @@ const PROGRAM_CALENDAR = [
       { d: 10, id: null,                            label: "Vacation",           kind: "off",    required: false },
       { d: 11, id: null,                            label: "Vacation",           kind: "off",    required: false },
       { d: 12, id: null,                            label: "Vacation",           kind: "off",    required: false },
-      { d: 13, id: null,                            label: "Vacation",           kind: "off",    required: false, note: "~11 days off costs an advanced lifter no strength — it holds 2–3 weeks. You come back rusty, not weaker." },
-      { d: 14, id: null,                            label: "Travel home",        kind: "off",    required: false, note: "Settle in. Extra rest day — training resumes tomorrow." },
+      { d: 13, id: null,                            label: "Travel home",        kind: "off",    required: false, note: "~10 days off costs an advanced lifter no strength — it holds 2–3 weeks. You come back rusty, not weaker. Training resumes tomorrow." },
     ],
   },
-  // Week 11 = re-entry, Mon Aug 17 – Sat Aug 22 (6 days).
+  // Week 11 = re-entry, Sun Aug 16 – Sat Aug 22 (7 days). Back on the standard
+  // split — the full week means the squat + arms double session is no longer
+  // needed, which is the right call coming off ~10 days away.
   {
-    week: 11, offset: 78, length: 6,
-    label: "Re-entry — resume Mon Aug 17",
+    week: 11, offset: 77, length: 7,
+    label: "Re-entry — resume Sun Aug 16",
     days: [
-      { d: 0, id: "seed-sun-heavy-bench",                 label: "Re-entry Bench",           kind: "train", required: true,  note: "Moved off Sun Aug 16 (travel day). Hit the 3×5 @ 75% ≈ 235 back-offs; lighten or skip the 88% single until bar speed returns." },
-      { d: 1, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
-      { d: 2, id: "seed-mon-squat-primary", extraId: "seed-wed-secondary-press-arms", label: "Squat Primary + Arms", kind: "train", required: true, note: "Doubled up: squat re-entry (back-offs 3×5 @ 74% ≈ 355, ease the 86% single) plus the secondary press and arm work." },
-      { d: 3, id: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Posterior", kind: "train", required: true,  note: "Everything capped at RPE 7.5 this week." },
-      { d: 4, id: "seed-fri-speed-bench-pump",            label: "Speed Bench (REQUIRED)",   kind: "train", required: true,  note: "4×3 @ 72% — speed bench is required from here to week 15. Drop pump work first, never the bar work." },
-      { d: 5, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
+      { d: 0, id: "seed-sun-heavy-bench",                 label: "Re-entry Bench",           kind: "train", required: true,  note: "First session back. Hit the 3×5 @ 75% ≈ 235 back-offs; lighten or skip the 88% single until bar speed returns." },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true,  note: "Squat re-entry: back-offs 3×5 @ 74% ≈ 355, ease the 86% single. Everything capped at RPE 7.5 this week." },
+      { d: 2, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
+      { d: 3, id: "seed-wed-secondary-press-arms",        label: "Secondary Press + Arms",   kind: "train", required: true,  note: "Back in its own slot — no doubling up this week." },
+      { d: 4, id: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Posterior", kind: "train", required: true,  note: "Everything capped at RPE 7.5 this week. RDLs at RPE ≤ 7." },
+      { d: 5, id: "seed-fri-speed-bench-pump",            label: "Speed Bench (REQUIRED)",   kind: "train", required: true,  note: "4×3 @ 72% — speed bench is required from here to week 15. Drop pump work first, never the bar work." },
+      { d: 6, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
     ],
   },
   { week: 12, offset: 84,  length: 7 },

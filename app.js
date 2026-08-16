@@ -999,14 +999,14 @@
       insights.push({
         kind: "warn",
         title: "This deload is your vacation — don't do both",
-        body: "Three light sessions (Aug 2/3/5) at RPE ≤ 6 and half the accessory sets, then off Aug 6–16. A gym deload stacked on 11 days off is two deloads. Walk and eat; don't go find a gym.",
+        body: "Three light sessions (Aug 2/3/5) at RPE ≤ 6 and half the accessory sets, then off Aug 6–15. A gym deload stacked on 10 days off is two deloads. Walk and eat; don't go find a gym.",
       });
     }
     if (ps.clamped === 11) {
       insights.push({
         kind: "warn",
         title: "Re-entry week — cap everything at RPE 7.5",
-        body: "You're back after ~11 days off: rusty, not weaker. Own the back-offs, lighten or skip the heavy single until bar speed is normal. Roll into week-12 loads only if the singles moved right — otherwise repeat this week. You have the slack.",
+        body: "You're back after ~10 days off: rusty, not weaker. Own the back-offs, lighten or skip the heavy single until bar speed is normal. Roll into week-12 loads only if the singles moved right — otherwise repeat this week. You have the slack.",
       });
     }
 
@@ -1019,7 +1019,7 @@
             ? `Deload next week — and it's your trip. Light Sun/Mon/Wed (Aug 2/3/5) at ${next.bench.load}/${next.squat.load}, RPE ≤ 6, then fly Thursday. The vacation replaces the gym deload.`
             : `Deload next week — ${next.bench.load}/${next.squat.load} top sets at RPE ≤ 6, 50% accessory sets, no PRs. Take it seriously; week ${ps.clamped + 5 <= 16 ? "after builds on it" : "16 is coming"}.`,
           Strength: "Strength block starts next week — caps rise to RPE 8.5, arms drop to 14/16 weekly sets.",
-          Bridge: "Bridge block next week — single practice starts (heavy 1×1 plus 3×5 back-offs) and Friday speed bench becomes REQUIRED. Training resumes Mon Aug 17 at RPE 7.5 caps.",
+          Bridge: "Bridge block next week — single practice starts (heavy 1×1 plus 3×5 back-offs) and Friday speed bench becomes REQUIRED. Training resumes Sun Aug 16 at RPE 7.5 caps, back on the standard Sun–Fri split.",
           Peak: "Peaking next week — volume −50%, accessories −60%. The strength is built; now you're just sharpening.",
           Test: `Test week next week — openers ${PROGRAM_PLAN.attemptPlan.bench[0]} bench / ${PROGRAM_PLAN.attemptPlan.squat[0]} squat. Squat first, then bench. Nothing hard inside 72 h, carb up, sleep is programming.`,
         };
@@ -1084,8 +1084,8 @@
     const row = ps.row;
     const today = new Date().getDay();
     // The calendar decides what today is — the vacation shift moves sessions
-    // off their usual weekdays (bench to Saturday in wk 9, everything to
-    // Mon–Fri in the wk 11 re-entry) and blanks out the trip entirely.
+    // off their usual weekdays (bench to Saturday in wk 9) and blanks out the
+    // trip entirely.
     const day = ps.day;
     let todayHtml;
     if (day && day.routineId) {
@@ -2569,7 +2569,7 @@
           <div class="tiny muted" style="margin-top:8px;">
             ${ps ? (ps.post
               ? "The 16-week cycle is complete."
-              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. The vacation-adjusted calendar (wk 9 opens Sat Jul 25, wk 10 absorbs the Aug 6–16 trip, training resumes Mon Aug 17, test day Sun Sep 20) is built in.`)
+              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. The vacation-adjusted calendar (wk 9 opens Sat Jul 25, wk 10 absorbs the Aug 6–15 trip, training resumes Sun Aug 16, test day Sun Sep 20) is built in.`)
               : "Set the Sunday your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
           </div>
           ${ps && !ps.post ? `
