@@ -19,8 +19,18 @@
 // is a full 7-day Sun–Sat week again, so the squat + arms double session it used
 // to need is unpacked back into the standard Sun/Mon/Wed/Thu/Fri split. Week 12
 // onward is untouched.
+//
+// 2026-08-27 revision: week 12's Wed light-bench/arms got skipped and made up
+// with a bonus heavy bench single on Thu instead (315×1 paused, matches the
+// 1RM input) — Thu's native squat volume slides to Fri. Week 13 loses Sun
+// (birthday) and Tue–Thu (travel): the heavy bench single moves to Fri rather
+// than Sat so it isn't back-to-back with week 14's own Sunday bench single;
+// Thu's squat volume moves to Sat; Wed's secondary-press/arms is dropped
+// (lowest-priority accessory day, and travel leaves no day to fold it into)
+// along with Fri's native speed-bench, sacrificed to protect the moved single.
+// Only the calendar changes — loads/blocks/weeks are untouched.
 
-const PROGRAM_PLAN_VERSION = 2;
+const PROGRAM_PLAN_VERSION = 3;
 
 const PROGRAM_PLAN = {
   name: "Powerlifting v3.1 — Max Strength",
@@ -158,8 +168,39 @@ const PROGRAM_CALENDAR = [
       { d: 6, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
     ],
   },
-  { week: 12, offset: 84,  length: 7 },
-  { week: 13, offset: 91,  length: 7 },
+  // Week 12: Wed light-bench/arms skipped, made up with a bonus heavy bench
+  // single Thu instead — Thu's native squat volume slides to Fri.
+  {
+    week: 12, offset: 84, length: 7,
+    label: "Wed skipped — bonus bench single Thu instead",
+    days: [
+      { d: 0, id: "seed-sun-heavy-bench",                 label: "Heavy Bench",             kind: "train", required: true },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",           kind: "train", required: true },
+      { d: 2, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
+      { d: 3, id: null,                                   label: "Skipped",                  kind: "rest",  required: false, note: "Secondary Press + Arms skipped — replaced by Thu's unplanned heavy single." },
+      { d: 4, id: "seed-sun-heavy-bench",                 label: "Heavy Bench Single (bonus)", kind: "train", required: true,  note: "Unplanned 315×1 paused single — matches the 1RM input. Done in place of the skipped Wed light-bench/arms day. Thu's native squat volume moves to Fri." },
+      { d: 5, id: "seed-fri-speed-bench-pump", extraId: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Speed Bench", kind: "train", required: true, note: "Thu's squat volume folded in here since Thu became the bonus bench single." },
+      { d: 6, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
+    ],
+  },
+  // Week 13: Sun off for birthday, Tue–Thu off for travel. Bench single moves
+  // to Fri (not Sat — Sat-into-Sun-14 would stack two heavy bench singles back
+  // to back with zero rest). Squat volume moves to Sat. Wed's secondary
+  // press/arms and Fri's native speed-bench are the two things that don't fit
+  // and get dropped — lowest-priority accessory/bonus work, not a main lift.
+  {
+    week: 13, offset: 91, length: 7,
+    label: "Birthday (Sun) + travel (Tue–Thu) — bench single moved to Fri",
+    days: [
+      { d: 0, id: null,                                   label: "Birthday — off",           kind: "off",    required: false, note: "Heavy bench single moved to Fri for spacing before week 14's own Sunday bench." },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true },
+      { d: 2, id: null,                                   label: "Travel",                   kind: "travel", required: false },
+      { d: 3, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Secondary Press + Arms skipped this week — travel leaves no day to fold it into. Arm volume catches up next week." },
+      { d: 4, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Squat Volume + Posterior moved to Sat." },
+      { d: 5, id: "seed-sun-heavy-bench",                 label: "Heavy Bench Single (moved from Sun)", kind: "train", required: true, note: "Moved from Sun (birthday). Native Fri speed-bench dropped this week to protect the single's placement and freshness." },
+      { d: 6, id: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Posterior (moved from Thu)", kind: "train", required: true, note: "Moved from Thu (travel)." },
+    ],
+  },
   { week: 14, offset: 98,  length: 7 },
   // Week 15: openers early, Friday is rest — nothing hard inside 72 h of test.
   {
