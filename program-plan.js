@@ -33,14 +33,12 @@
 // 2026-08-28 revision: squat 1RM input updated 478 → 500 off an unplanned
 // 500×1 @ RPE 9.5 on wk-12's Fri squat-volume-turned-max-attempt day — a
 // near-max grinder, not a clean single. Squat %-based work recalculated off
-// 500 for weeks 13–16 (attemptPlan/goals too, same ratios as before). Per the
-// existing progression rule (cap beats the ladder — repeat the load if the
-// cap was blown), week 13's Monday single and back-off repeat week 12's
-// percentages (88/75) instead of taking the normal next step (90/76), so the
-// very next squat session doesn't jump straight to a fresh 90%-of-500 single
-// three days after a 9.5 RPE max effort. Weeks 14–16 resume the normal
-// ladder off the new max — the app's own RPE-cap check will catch it live if
-// Monday also runs hot. Bench is untouched.
+// 500 for weeks 13–16 (attemptPlan/goals too, same ratios as before). No
+// extra deload stacked on top of week 13's own birthday/travel days off —
+// those already cover the recovery. Week 13's Monday single takes the
+// normal next ladder step (90/76) off the new 500, same as any other week;
+// 90% of a fresh max isn't max-effort loading, so there's nothing to dial
+// back. Bench is untouched.
 
 const PROGRAM_PLAN_VERSION = 4;
 
@@ -84,7 +82,7 @@ const PROGRAM_PLAN = {
     { week: 10, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 62,   load: 295 }, squatBO: null,                                  note: "Deload = your vacation. Three light sessions (Aug 2/3/5) at 50% accessory sets, then off Aug 6–15. Don't do a gym deload AND 10 days off — the trip is the rest." },
     { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Sun Aug 16 after ~10 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
     { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "Back to the normal Sun–Fri split. Single practice at full load." },
-    { week: 13, block: "Bridge",      rpeCap: 8.5, bench: { sets: 1, reps: 1, pct: 92,   load: 290 }, benchBO: { sets: 3, reps: 5, pct: 77, load: 245 }, squat: { sets: 1, reps: 1, pct: 88,   load: 440 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 375 }, note: "Squat 1RM updated 478→500 off Fri wk-12's unplanned 500×1 @ RPE 9.5 (a grinder, not a clean single). Cap-beats-the-ladder: Monday's single and back-off repeat wk-12's percentages (88/75) instead of the normal 90/76 step — autoregulate it, don't chase 440 if it isn't moving clean. Bench is unaffected." },
+    { week: 13, block: "Bridge",      rpeCap: 8.5, bench: { sets: 1, reps: 1, pct: 92,   load: 290 }, benchBO: { sets: 3, reps: 5, pct: 77, load: 245 }, squat: { sets: 1, reps: 1, pct: 90,   load: 450 }, squatBO: { sets: 3, reps: 5, pct: 76, load: 380 }, note: "Squat 1RM updated 478→500 off Fri wk-12's unplanned 500×1 @ RPE 9.5 (a grinder, not a clean single). Normal 90/76 ladder step off the new max — the week's own birthday/travel days off already cover the recovery, so nothing's dialed back further. Bench is unaffected." },
     { week: 14, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 460 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 390 }, note: "Volume −50%. Accessories −60%. Saturday off. Squat resumes the normal ladder off the 500 1RM." },
     { week: 15, block: "Peak",        rpeCap: 9,   bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 2, pct: 75, load: 235 }, squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: { sets: 2, reps: 2, pct: 72, load: 360 }, note: "Volume −70%. Openers early in the week (≥4 days before test), then Friday is REST. Carb-load the final 3 days. Sleep is programming." },
     { week: 16, block: "Test",        rpeCap: 10,  bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: null,                                  squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: null,                                  note: "TEST — Sun Sep 20. Squat first, then bench (meet order). Full rest 5–8 min between attempts. Third attempts are earned: take the PR only if the second moved at ≤ RPE 9." },
@@ -205,7 +203,7 @@ const PROGRAM_CALENDAR = [
     label: "Birthday (Sun) + travel (Tue–Thu) — bench single moved to Fri",
     days: [
       { d: 0, id: null,                                   label: "Birthday — off",           kind: "off",    required: false, note: "Heavy bench single moved to Fri for spacing before week 14's own Sunday bench." },
-      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true,  note: "440×1 target (88% of the new 500 1RM) — repeating wk-12's percentage, not the normal 90% step, since Fri's 9.5 RPE grinder blew the cap. Autoregulate: don't chase it if it's not moving clean." },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true,  note: "450×1 — normal 90% step off the new 500 1RM. Not max-effort loading, and the weekend off already covers recovery from Fri's grinder, so no extra dial-back." },
       { d: 2, id: null,                                   label: "Travel",                   kind: "travel", required: false },
       { d: 3, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Secondary Press + Arms skipped this week — travel leaves no day to fold it into. Arm volume catches up next week." },
       { d: 4, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Squat Volume + Posterior moved to Sat." },
