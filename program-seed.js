@@ -29,6 +29,11 @@
 // drop Fri pump work only (wks 11–15); flagged again → cut triceps volume ~20%.
 //
 // Weight is stored internally in POUNDS (the app converts for kg display).
+//
+// 2026-08-28/29: the squat 1RM input in program-plan.js went 478 → 500 (the
+// unplanned wk-12 max). That does not touch the squat numbers below — they are
+// scaffolding only, overwritten from program-plan.js on every launch per the
+// note above.
 
 const PROGRAM_SEED_VERSION = 3;
 
