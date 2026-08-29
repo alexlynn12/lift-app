@@ -68,7 +68,24 @@
 // the 08-28 work. Check the repo's commit history for program-plan.js before
 // editing from the local copy.
 
-const PROGRAM_PLAN_VERSION = 4;
+// 2026-08-29 revision 2: WEEK 13 CONVERTED TO A MINI DELOAD at Alex's request.
+// Its original job was to walk the singles up past week 9 — but week 12 already
+// blew past every number week 13 was going to ask for (500 squat, 315 paused
+// bench), so the only thing left for this week to do is absorb the fatigue from
+// an unplanned max. Alex is also away Tue–Thu, so the week is down to Mon/Fri
+// (+ an optional Sat) whatever we do. Block Bridge → Deload, rpeCap 8.5 → 6,
+// the heavy singles and back-offs are gone, replaced by straight 3×5s.
+//
+// Loads are a MINI deload, not the program's full one: bench 70% (220) and
+// squat 67.5% (340) rather than the 62.5%/62% used in weeks 5 and 10. Week 14
+// opens with a 93% bench double and a 91.5% squat single, and dropping to the
+// full deload floor makes that a ~30% jump in seven days. RPE ≤ 6 at 70% is
+// still a walk — the recovery comes from deleting the singles and halving the
+// volume, not from going lighter than that.
+// Block order is now: Bridge (11–12) → Deload (13) → Peak (14–15) → Test (16),
+// which is the textbook max → deload → peak → taper → test sequence.
+
+const PROGRAM_PLAN_VERSION = 5;
 
 const PROGRAM_PLAN = {
   name: "Powerlifting v3.1 — Max Strength",
@@ -97,6 +114,7 @@ const PROGRAM_PLAN = {
     fatigue: "2 sessions in a row over target RPE → pull the week's loads 5%.",
     benchStandard: "Every comp-bench top set is PAUSED (comp command).",
     vacation: "The Aug 6–14 trip REPLACES the week-10 gym deload — don't do both. Three light sessions (Aug 2/3/5), then the trip is the rest.",
+    miniDeload: "Week 13 is a mini deload (2026-08-29). No singles, no back-offs, no PRs: 3×5 at RPE ≤ 6, half the accessory sets. It is not a week to make up missed work in — the point is to walk into peak week fresh, and the travel is doing half the job already.",
     postPr: "Week 12 was an unplanned max four weeks early (500 squat @ RPE 9.5, 315 paused bench). Bank the numbers, then respect the fatigue: if the back or hips flagged during it or the morning after, run week 13 at RPE ≤ 7 and do not chase another heavy single.",
     hinge: "UNRESOLVED (2026-08-29): this program says the back is cleared and prescribes RDLs; the 2026-08-18 injury log lists the lower back as ACTIVE with RDL, deadlift, good morning and bent-over row contraindicated. Until that is settled the Thursday hinge is a HIP THRUST — same posterior chain, no spinal loading. Swap it back only after confirming the back is clear.",
     reentry: "Week 11 is a re-entry week after ~11 days off: cap ALL top sets at RPE 7.5 and lighten or skip the heavy single until bar speed is normal. Roll into week-12 loads only if the singles felt right; otherwise repeat week 11.",
@@ -115,7 +133,7 @@ const PROGRAM_PLAN = {
     { week: 10, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 62,   load: 295 }, squatBO: null,                                  note: "Deload = your vacation. Three light sessions (Aug 2/3/5) at 50% accessory sets, then off Aug 6–15. Don't do a gym deload AND 10 days off — the trip is the rest." },
     { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Sun Aug 16 after ~10 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
     { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "ACTUAL: bench 315 × 1 PAUSED (prescribed single was 285) and squat 500 × 1 @ RPE 9.5 (prescribed 1×2 @ 420). Both far over block spec — an unplanned max test four weeks early. Squat 1RM input updated 478 → 500; bench held at 315. Loads below are what was prescribed, kept as history." },
-    { week: 13, block: "Bridge",      rpeCap: 8.5, bench: { sets: 1, reps: 1, pct: 92,   load: 290 }, benchBO: { sets: 3, reps: 5, pct: 77, load: 245 }, squat: { sets: 1, reps: 1, pct: 90,   load: 450 }, squatBO: { sets: 3, reps: 5, pct: 76, load: 380 }, note: "Recalculated off the new 500 squat — the normal 90/76 ladder step, not a dial-back: the week's own birthday Sunday and Tue–Thu travel already cover the recovery. POST-PR CAUTION from the v3.2 sheet still applies: week 12 was an unplanned max, so if the back or hips flagged during the 500 or the morning after, cap this week at RPE ≤ 7 or convert it to an early deload rather than chasing another heavy single. Short week: squat Mon, bench single Fri, squat volume Sat." },
+    { week: 13, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 70,   load: 220 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 67.5, load: 340 }, squatBO: null,                                  note: "MINI DELOAD (was a Bridge week). Week 12 was an unplanned max — 500 squat at RPE 9.5 and a paused 315 bench — which already beat every number this week was going to ask for, so there is nothing left to build and plenty to recover from. Heavy singles and back-offs are deleted: 3×5 at RPE ≤ 6, half the accessory sets, no PRs. Loads sit above the usual deload floor (70% / 67.5% rather than 62.5% / 62%) because peak week opens with a 93% bench and a 91.5% squat single and you should not walk into that flat. Away Tue–Thu, so the week is Mon and Fri with Saturday optional." },
     { week: 14, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 460 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 390 }, note: "Volume −50%. Accessories −60%. Saturday off." },
     { week: 15, block: "Peak",        rpeCap: 9,   bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 2, pct: 75, load: 235 }, squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: { sets: 2, reps: 2, pct: 72, load: 360 }, note: "Volume −70%. Openers early in the week (≥4 days before test), then Friday is REST. Carb-load the final 3 days. Sleep is programming." },
     { week: 16, block: "Test",        rpeCap: 10,  bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: null,                                  squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: null,                                  note: "TEST — Sun Sep 20. Squat first, then bench (meet order). Full rest 5–8 min between attempts. Third attempts are earned: take the PR only if the second moved at ≤ RPE 9." },
@@ -233,15 +251,15 @@ const PROGRAM_CALENDAR = [
   // and get dropped — lowest-priority accessory/bonus work, not a main lift.
   {
     week: 13, offset: 91, length: 7,
-    label: "Birthday (Sun) + travel (Tue–Thu) — bench single moved to Fri",
+    label: "Mini deload — birthday Sun, travel Tue–Thu",
     days: [
-      { d: 0, id: null,                                   label: "Birthday — off",           kind: "off",    required: false, note: "Heavy bench single moved to Fri for spacing before week 14's own Sunday bench." },
-      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true,  note: "450 × 1 — the normal 90% step off the new 500. That is not max-effort loading, and Sunday off already buys recovery from Friday's grinder, so nothing is dialled back on top. If the back or hips are still talking, this is the session to cap at RPE 7." },
+      { d: 0, id: null,                                   label: "Birthday — off",           kind: "off",    required: false, note: "Happy birthday. The heavy bench single that was moved here is cancelled outright — this is a deload week now, and week 12's paused 315 already banked what that single was for." },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Deload Squat",             kind: "train", required: true,  note: "3×5 @ 340, RPE ≤ 6. Crisp and fast off the floor — if a rep feels like work, you are too heavy. No singles, no back-offs, half the accessory sets." },
       { d: 2, id: null,                                   label: "Travel",                   kind: "travel", required: false },
-      { d: 3, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Secondary Press + Arms skipped this week — travel leaves no day to fold it into. Arm volume catches up next week." },
-      { d: 4, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Squat Volume + Posterior moved to Sat." },
-      { d: 5, id: "seed-sun-heavy-bench",                 label: "Heavy Bench Single (moved from Sun)", kind: "train", required: true, note: "Moved from Sun (birthday). Native Fri speed-bench dropped this week to protect the single's placement and freshness." },
-      { d: 6, id: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Posterior (moved from Thu)", kind: "train", required: true, note: "Moved from Thu (travel). Hinge is a HIP THRUST, not an RDL, until the back status is confirmed." },
+      { d: 3, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Secondary Press + Arms is off this week. On a deload that is a feature — arm volume picks back up in week 14." },
+      { d: 4, id: null,                                   label: "Travel",                   kind: "travel", required: false },
+      { d: 5, id: "seed-sun-heavy-bench",                 label: "Deload Bench",             kind: "train", required: true, note: "3×5 @ 220, PAUSED, RPE ≤ 6. The heavy single is cancelled — keep the comp command and the bar speed, drop the strain. This is the last bench before peak week's 295 double." },
+      { d: 6, id: "seed-thu-squat-volume-posterior-arms", label: "Light Squat + Posterior (optional)", kind: "train", required: false, note: "OPTIONAL. Take it only if the travel left you feeling good — peak week opens tomorrow with a 460 squat single. Everything light, RPE ≤ 6, and the hinge is a HIP THRUST, not an RDL, until the back status is confirmed." },
     ],
   },
   { week: 14, offset: 98,  length: 7 },
@@ -411,13 +429,24 @@ const PLAN_VARIATIONS = {
   thuSquat:  { Hypertrophy: { sets: 3, reps: 6, pct: 0.73 }, Strength: { sets: 3, reps: 5, pct: 0.75 }, Bridge: { sets: 3, reps: 5, pct: 0.74 }, Peak: { sets: 1, reps: 3, pct: 0.70, week14Only: true }, Test: null },
 };
 
+// Deload scaling for the variations priced as a % of the CYCLE 1RM (cgbp,
+// incline, thuSquat). The `off`-based variations (larsen, pauseMon) key off the
+// day's comp load and therefore deload themselves; the pct-based ones do not,
+// and without this they came out HEAVIER than the deload comp lift they sit
+// beside — Thursday's 73%-of-1RM volume squat was 365 next to a 340 comp
+// squat. 0.85 lands each of them at roughly the deload comp percentage
+// (0.73 × 0.85 ≈ 62%, which is exactly the program's own deload squat).
+const PLAN_DELOAD_PCT_SCALE = 0.85;
+
 function planVariationScheme(kind, block) {
   const scheme = PLAN_VARIATIONS[kind][planBlockKey(block)];
   if (!scheme) return null;
   if (block === "Deload") {
-    // 50% accessory sets on deload weeks, same rep targets, lighter by design
-    // because the comp loads they key off are deload loads.
-    return { ...scheme, sets: Math.max(1, Math.ceil(scheme.sets / 2)) };
+    // 50% accessory sets on deload weeks, same rep targets, and the %-of-1RM
+    // loads pulled down so they sit under the deload comp lift.
+    const out = { ...scheme, sets: Math.max(1, Math.ceil(scheme.sets / 2)) };
+    if (typeof out.pct === "number") out.pct = out.pct * PLAN_DELOAD_PCT_SCALE;
+    return out;
   }
   return scheme;
 }

@@ -1019,9 +1019,9 @@
     }
     if (ps.clamped === 13) {
       insights.push({
-        kind: "warn",
-        title: "Post-PR week — the loads are a ceiling, not a mandate",
-        body: "Week 12 was an unplanned max, not a bridge week. If the back or hips flagged during the 500 or the morning after, run this week at RPE ≤ 7 or convert it to an early deload — do not chase another heavy single. Short week too: birthday Sunday and travel Tue–Thu, so it's squat Mon, bench single Fri, squat volume Sat.",
+        kind: "info",
+        title: "Mini deload — nothing to prove this week",
+        body: "This was a bridge week until week 12 turned into a max. You already beat every number it was going to ask for, so it is now 3×5 at RPE ≤ 6 with half the accessories: squat 340 Monday, paused bench 220 Friday, Saturday optional. The heavy singles are cancelled, not postponed. Peak week opens next Sunday with a 295 bench double and a 460 squat single — the job this week is to show up there fresh.",
       });
     }
     if (ps.clamped === 11) {
