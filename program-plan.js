@@ -30,15 +30,27 @@
 // along with Fri's native speed-bench, sacrificed to protect the moved single.
 // Only the calendar changes — loads/blocks/weeks are untouched.
 //
-// 2026-08-28 revision: squat 1RM input updated 478 → 500 off an unplanned
-// 500×1 @ RPE 9.5 on wk-12's Fri squat-volume-turned-max-attempt day — a
-// near-max grinder, not a clean single. Squat %-based work recalculated off
-// 500 for weeks 13–16 (attemptPlan/goals too, same ratios as before). No
-// extra deload stacked on top of week 13's own birthday/travel days off —
-// those already cover the recovery. Week 13's Monday single takes the
-// normal next ladder step (90/76) off the new 500, same as any other week;
-// 90% of a fresh max isn't max-effort loading, so there's nothing to dial
-// back. Bench is untouched.
+// 2026-08-29 revision (sheet v3.2 "PRupdate"): week 12 turned into an
+// unplanned max four weeks early — SQUAT 500 × 1, comp depth, RPE 9.5 (+22 lb
+// lifetime PR over 478) and BENCH 315 × 1 PAUSED / comp-legal (the previous
+// 315 was a butt-off grinder, so the bar weight did not move but the
+// competition max did). Consequences:
+//   • squat 1RM input 478 → 500 — Alex's tested max, not the sheet's 510 e1RM
+//     extrapolation. Weeks 13–16 squat loads, the Thursday %-of-1RM volume
+//     squat, and the test-day attempts all recalculate off it.
+//   • bench 1RM stays 315. The paused single raised the QUALITY of the max,
+//     not the number, and its RPE was never recorded. Bench loads unchanged.
+//   • weeks 1–12 keep the loads Alex actually trained. The sheet recalculates
+//     them as a formula artifact, but they are history here, and rewriting
+//     them would make completed sessions read as under-plan against the
+//     "logged vs. plan" comparison in recentMainLiftSessions().
+//   • the squat goal (470–485) was passed in week 12 → new goal 500–515.
+//   • HINGE: the sheet says the back is cleared and programs RDLs; the
+//     2026-08-18 injury log lists the lower back as ACTIVE with RDL/deadlift/
+//     good-morning/bent-over-row contraindicated. Unresolved, so the Thursday
+//     hinge is a HIP THRUST until Alex confirms — same posterior chain, no
+//     spinal loading. See rules.hinge.
+// Week 13's calendar (birthday Sun, travel Tue–Thu) is confirmed and unchanged.
 
 const PROGRAM_PLAN_VERSION = 4;
 
@@ -48,15 +60,18 @@ const PROGRAM_PLAN = {
   // Sunday of week 1. Week 9 opens Sat Jul 25 2026 per the vacation-adjusted
   // sheet, which anchors week 1 to May 31 2026.
   defaultStartDate: "2026-05-31",
+  // 2026-08-29: squat 478 → 500 (tested, RPE 9.5, week 12). Bench held at 315 —
+  // the paused single re-qualified the max rather than raising it.
   oneRm: { bench: 315, squat: 500 },
   goals: {
     bench: { lo: 322.5, hi: 328 },
-    squat: { lo: 490, hi: 505 },
+    // Original 470–485 was cleared in week 12. New job: hold 500, earn 515.
+    squat: { lo: 500, hi: 515 },
   },
   // Test-day attempt plan (week 16): opener / second / third (earned PR).
   attemptPlan: {
     bench: [295, 312.5, 322.5],
-    squat: [465, 490, 505],
+    squat: [465, 500, 515],
   },
   // Weekly direct-set targets (guaranteed Sun/Wed/Thu; Fri is bonus only).
   armSets: { biceps: [14, 16], triceps: [12, 14] },
@@ -66,6 +81,8 @@ const PROGRAM_PLAN = {
     fatigue: "2 sessions in a row over target RPE → pull the week's loads 5%.",
     benchStandard: "Every comp-bench top set is PAUSED (comp command).",
     vacation: "The Aug 6–14 trip REPLACES the week-10 gym deload — don't do both. Three light sessions (Aug 2/3/5), then the trip is the rest.",
+    postPr: "Week 12 was an unplanned max four weeks early (500 squat @ RPE 9.5, 315 paused bench). Bank the numbers, then respect the fatigue: if the back or hips flagged during it or the morning after, run week 13 at RPE ≤ 7 and do not chase another heavy single.",
+    hinge: "UNRESOLVED (2026-08-29): this program says the back is cleared and prescribes RDLs; the 2026-08-18 injury log lists the lower back as ACTIVE with RDL, deadlift, good morning and bent-over row contraindicated. Until that is settled the Thursday hinge is a HIP THRUST — same posterior chain, no spinal loading. Swap it back only after confirming the back is clear.",
     reentry: "Week 11 is a re-entry week after ~11 days off: cap ALL top sets at RPE 7.5 and lighten or skip the heavy single until bar speed is normal. Roll into week-12 loads only if the singles felt right; otherwise repeat week 11.",
   },
   // One row per week. bench/squat = top sets; bo = back-off sets (bridge/peak).
@@ -81,9 +98,9 @@ const PROGRAM_PLAN = {
     { week: 9,  block: "Strength",    rpeCap: 8.5, bench: { sets: 3, reps: 2, pct: 90,   load: 285 }, benchBO: null,                                  squat: { sets: 3, reps: 2, pct: 87.5, load: 420 }, squatBO: null,                                  note: "Heaviest pre-peak volume week. Vacation-adjusted: heavy bench Sat Jul 25 (fresh day), squat primary Sun Jul 26, Mon Jul 27 off for the event. Nothing is lost — both comp lifts are banked over the weekend." },
     { week: 10, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 62,   load: 295 }, squatBO: null,                                  note: "Deload = your vacation. Three light sessions (Aug 2/3/5) at 50% accessory sets, then off Aug 6–15. Don't do a gym deload AND 10 days off — the trip is the rest." },
     { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Sun Aug 16 after ~10 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
-    { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "Back to the normal Sun–Fri split. Single practice at full load." },
-    { week: 13, block: "Bridge",      rpeCap: 8.5, bench: { sets: 1, reps: 1, pct: 92,   load: 290 }, benchBO: { sets: 3, reps: 5, pct: 77, load: 245 }, squat: { sets: 1, reps: 1, pct: 90,   load: 450 }, squatBO: { sets: 3, reps: 5, pct: 76, load: 380 }, note: "Squat 1RM updated 478→500 off Fri wk-12's unplanned 500×1 @ RPE 9.5 (a grinder, not a clean single). Normal 90/76 ladder step off the new max — the week's own birthday/travel days off already cover the recovery, so nothing's dialed back further. Bench is unaffected." },
-    { week: 14, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 460 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 390 }, note: "Volume −50%. Accessories −60%. Saturday off. Squat resumes the normal ladder off the 500 1RM." },
+    { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "ACTUAL: bench 315 × 1 PAUSED (prescribed single was 285) and squat 500 × 1 @ RPE 9.5 (prescribed 1×2 @ 420). Both far over block spec — an unplanned max test four weeks early. Squat 1RM input updated 478 → 500; bench held at 315. Loads below are what was prescribed, kept as history." },
+    { week: 13, block: "Bridge",      rpeCap: 8.5, bench: { sets: 1, reps: 1, pct: 92,   load: 290 }, benchBO: { sets: 3, reps: 5, pct: 77, load: 245 }, squat: { sets: 1, reps: 1, pct: 90,   load: 450 }, squatBO: { sets: 3, reps: 5, pct: 76, load: 380 }, note: "Recalculated off the new 500 squat. POST-PR CAUTION: week 12 was an unplanned max — if the back flagged during it or the morning after, run this week at RPE ≤ 7 or convert it to an early deload. Do not chase another heavy single. Calendar is short this week (birthday Sun, travel Tue–Thu): squat Mon, bench single Fri, squat volume Sat." },
+    { week: 14, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 460 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 390 }, note: "Volume −50%. Accessories −60%. Saturday off." },
     { week: 15, block: "Peak",        rpeCap: 9,   bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 2, pct: 75, load: 235 }, squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: { sets: 2, reps: 2, pct: 72, load: 360 }, note: "Volume −70%. Openers early in the week (≥4 days before test), then Friday is REST. Carb-load the final 3 days. Sleep is programming." },
     { week: 16, block: "Test",        rpeCap: 10,  bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: null,                                  squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: null,                                  note: "TEST — Sun Sep 20. Squat first, then bench (meet order). Full rest 5–8 min between attempts. Third attempts are earned: take the PR only if the second moved at ≤ RPE 9." },
   ],
@@ -189,7 +206,7 @@ const PROGRAM_CALENDAR = [
       { d: 2, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
       { d: 3, id: null,                                   label: "Skipped",                  kind: "rest",  required: false, note: "Secondary Press + Arms skipped — replaced by Thu's unplanned heavy single." },
       { d: 4, id: "seed-sun-heavy-bench",                 label: "Heavy Bench Single (bonus)", kind: "train", required: true,  note: "Unplanned 315×1 paused single — matches the 1RM input. Done in place of the skipped Wed light-bench/arms day. Thu's native squat volume moves to Fri." },
-      { d: 5, id: "seed-fri-speed-bench-pump", extraId: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Speed Bench", kind: "train", required: true, note: "Planned squat volume turned into an unplanned 500×1 @ RPE 9.5 — new squat 1RM. Speed bench still done as planned." },
+      { d: 5, id: "seed-fri-speed-bench-pump", extraId: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Speed Bench", kind: "train", required: true, note: "Thu's squat volume folded in here since Thu became the bonus bench single." },
       { d: 6, id: null,                                   label: "Rest",                     kind: "rest",  required: false },
     ],
   },
@@ -203,12 +220,12 @@ const PROGRAM_CALENDAR = [
     label: "Birthday (Sun) + travel (Tue–Thu) — bench single moved to Fri",
     days: [
       { d: 0, id: null,                                   label: "Birthday — off",           kind: "off",    required: false, note: "Heavy bench single moved to Fri for spacing before week 14's own Sunday bench." },
-      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true,  note: "450×1 — normal 90% step off the new 500 1RM. Not max-effort loading, and the weekend off already covers recovery from Fri's grinder, so no extra dial-back." },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Primary",            kind: "train", required: true },
       { d: 2, id: null,                                   label: "Travel",                   kind: "travel", required: false },
       { d: 3, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Secondary Press + Arms skipped this week — travel leaves no day to fold it into. Arm volume catches up next week." },
       { d: 4, id: null,                                   label: "Travel",                   kind: "travel", required: false, note: "Squat Volume + Posterior moved to Sat." },
       { d: 5, id: "seed-sun-heavy-bench",                 label: "Heavy Bench Single (moved from Sun)", kind: "train", required: true, note: "Moved from Sun (birthday). Native Fri speed-bench dropped this week to protect the single's placement and freshness." },
-      { d: 6, id: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Posterior (moved from Thu)", kind: "train", required: true, note: "Moved from Thu (travel)." },
+      { d: 6, id: "seed-thu-squat-volume-posterior-arms", label: "Squat Volume + Posterior (moved from Thu)", kind: "train", required: true, note: "Moved from Thu (travel). Hinge is a HIP THRUST, not an RDL, until the back status is confirmed." },
     ],
   },
   { week: 14, offset: 98,  length: 7 },
@@ -415,7 +432,10 @@ const PLAN_ACCESSORIES = {
     { id: "overhead-triceps-extension", label: "Long head",                              Hypertrophy: { sets: 3, reps: 12, range: "10–12" }, Strength: { sets: 3, reps: 10, range: "10" },   Bridge: { sets: 3, reps: 12, range: "10–12" }, Peak: null, Test: null },
   ],
   "seed-thu-squat-volume-posterior-arms": [
-    { id: "romanian-deadlift",          label: "Hinge — RPE ≤ 7, never a max",           Hypertrophy: { sets: 3, reps: 8,  range: "8" },     Strength: { sets: 3, reps: 6,  range: "6" },    Bridge: { sets: 3, reps: 6,  range: "6" },     Peak: null, Test: null },
+    // 2026-08-29: RDL → hip thrust while the lower-back status is unresolved
+    // (see rules.hinge). Same posterior chain, no spinal loading. Swap back to
+    // "romanian-deadlift" once the back is confirmed clear.
+    { id: "hip-thrust",                 label: "Hinge — RPE ≤ 7, never a max (RDL substitute)", Hypertrophy: { sets: 3, reps: 8,  range: "8" },     Strength: { sets: 3, reps: 6,  range: "6" },    Bridge: { sets: 3, reps: 6,  range: "6" },     Peak: null, Test: null },
     { id: "leg-curl",                   label: "",                                       Hypertrophy: { sets: 3, reps: 12, range: "10–12" }, Strength: { sets: 3, reps: 10, range: "10" },   Bridge: { sets: 3, reps: 10, range: "10" },    Peak: null, Test: null },
     { id: "preacher-curl",              label: "Or spider curl — short-length/peak",     Hypertrophy: { sets: 4, reps: 15, range: "10–15" }, Strength: { sets: 3, reps: 10, range: "10" },   Bridge: { sets: 4, reps: 15, range: "10–15" }, Peak: null, Test: null },
     { id: "reverse-curl",               label: "Reverse EZ — brachialis/forearm",        Hypertrophy: { sets: 3, reps: 15, range: "12–15" }, Strength: { sets: 2, reps: 12, range: "12" },   Bridge: { sets: 3, reps: 15, range: "12–15" }, Peak: null, Test: null },

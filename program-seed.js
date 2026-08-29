@@ -18,6 +18,8 @@
 // weekly pulling was 7 sets, all on Sunday. Baseline numbers moved to week 9 (Strength).
 //
 // Baseline shown = WEEK 9, Strength block · Bench 1RM 315 · Squat 1RM 478
+// (2026-08-29: squat input is now 500 — these seed numbers are only the first-launch
+//  placeholder; syncSeedRoutinesToPlan() overwrites them with the live week each launch.)
 //   Sun comp bench   3×2 @ 90%   = 285   (PAUSED, comp command)  RPE ≤ 8.5
 //   Mon comp squat   3×2 @ 87.5% = 420                           RPE ≤ 8.5
 //   Larsen/Spoto = −10% of the day's comp bench. Pause squat = −12% of comp squat.
@@ -27,11 +29,6 @@
 // drop Fri pump work only (wks 11–15); flagged again → cut triceps volume ~20%.
 //
 // Weight is stored internally in POUNDS (the app converts for kg display).
-//
-// 2026-08-28: squat 1RM input in program-plan.js updated 478 → 500 (unplanned
-// wk-12 max attempt). Doesn't touch this file — squat sets/loads below are
-// scaffolding only, overwritten from program-plan.js on every launch per the
-// note above.
 
 const PROGRAM_SEED_VERSION = 3;
 
@@ -92,7 +89,9 @@ const PROGRAM_SEED = [
     exercises: [
       { exerciseId: "pause-squat", note: "High-bar or pause · ~75% of squat 1RM · 3×5 @ 360 · RPE ≤ 8",
         sets: [ {weight:360,reps:5}, {weight:360,reps:5}, {weight:360,reps:5} ] },
-      { exerciseId: "romanian-deadlift", note: "Hinge — RPE ≤ 7, never a max · 3×6",
+      // 2026-08-29: RDL swapped for hip thrust while the lower-back status is
+      // unresolved (sheet says cleared, 2026-08-18 injury log says active).
+      { exerciseId: "hip-thrust", note: "Hinge — RPE ≤ 7, never a max · 3×6 · RDL substitute until the back is confirmed clear",
         sets: [ {weight:"",reps:6}, {weight:"",reps:6}, {weight:"",reps:6} ] },
       { exerciseId: "leg-curl", note: "3×10",
         sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },

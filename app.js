@@ -1002,6 +1002,28 @@
         body: "Three light sessions (Aug 2/3/5) at RPE ≤ 6 and half the accessory sets, then off Aug 6–15. A gym deload stacked on 10 days off is two deloads. Walk and eat; don't go find a gym.",
       });
     }
+    // Hinge conflict — stands until the back status is settled.
+    if (PROGRAM_PLAN.rules.hinge) {
+      insights.push({
+        kind: "warn",
+        title: "Hinge is a hip thrust — back status unresolved",
+        body: "The program sheet says the back is cleared and prescribes RDLs; your 2026-08-18 injury log lists the lower back as active with RDLs contraindicated. Until you confirm which is current, Thursday's hinge is a hip thrust — same posterior chain, no spinal loading. Tell me the back is clear and I'll put the RDL back.",
+      });
+    }
+    if (ps.clamped === 12) {
+      insights.push({
+        kind: "good",
+        title: "Squat PR banked — 500 × 1",
+        body: "500 at RPE 9.5 with comp depth is a 22 lb lifetime PR, and it came four weeks early on a week that asked for a 420 double. The 1RM input is now 500, so weeks 13–16 and your test-day attempts (465 / 500 / 515) all recalculated. Bench holds at 315 — the paused single made the max comp-legal, which is worth more than the number.",
+      });
+    }
+    if (ps.clamped === 13) {
+      insights.push({
+        kind: "warn",
+        title: "Post-PR week — the loads are a ceiling, not a mandate",
+        body: "Week 12 was an unplanned max, not a bridge week. If the back or hips flagged during the 500 or the morning after, run this week at RPE ≤ 7 or convert it to an early deload — do not chase another heavy single. Short week too: birthday Sunday and travel Tue–Thu, so it's squat Mon, bench single Fri, squat volume Sat.",
+      });
+    }
     if (ps.clamped === 11) {
       insights.push({
         kind: "warn",
@@ -2569,7 +2591,7 @@
           <div class="tiny muted" style="margin-top:8px;">
             ${ps ? (ps.post
               ? "The 16-week cycle is complete."
-              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. The vacation-adjusted calendar (wk 9 opens Sat Jul 25, wk 10 absorbs the Aug 6–15 trip, training resumes Sun Aug 16, test day Sun Sep 20) is built in.`)
+              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. The vacation-adjusted calendar (wk 9 opens Sat Jul 25, wk 10 absorbs the Aug 6–15 trip, training resumes Sun Aug 16, test day Sun Sep 20) is built in. Squat 1RM input is 500 and bench 315 as of the 2026-08-29 PR update.`)
               : "Set the Sunday your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
           </div>
           ${ps && !ps.post ? `
