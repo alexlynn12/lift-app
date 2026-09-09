@@ -104,7 +104,31 @@
 // deload never happened. Four unplanned days off (Sat-Tue) more than absorb the
 // overshoot, so peak week opens on schedule rather than dialed back.
 
-const PROGRAM_PLAN_VERSION = 6;
+// 2026-09-09, second revision: week 14 dialed back to a RE-ENTRY week at Alex's
+// request. Training history behind the call: week 13 carried five non-training
+// days (birthday + travel), and Fri Sep 4 was followed by five more straight off
+// (Sat Sep 5 - Wed Sep 9). Two sessions in eleven days, and the last heavy single
+// on either lift is Aug 27/28. Opening a peak week with a 93% bench double and a
+// 91.5% squat single off that is asking a rusty groove to hold a near-max, which
+// is how a taper turns into a grinder.
+//
+// Top singles cut 295 -> 275 (93% -> 87.5%) and 460 -> 435 (91.5% -> 87%), RPE
+// cap 9 -> 8, back-offs 250 -> 245 and 390 -> 375. Each carries an earn-it
+// clause: RPE <= 7.5 on the top single buys ONE more (bench 285, squat 450) and
+// nothing beyond it. Volume stays -50% and accessories -60%; this is a lighter
+// peak week, not a second deload, and the week-11 re-entry precedent is the
+// model (cap the top set, own the back-offs, let bar speed gate the load).
+//
+// WEEK 15 AND 16 ARE UNCHANGED. The Sun Sep 13 bench opener and Mon Sep 14 squat
+// opener become the first 93% exposures of the cycle and are now the rehearsal
+// that matters - still >=4 days clear of the Sep 20 test, which is the taper
+// requirement. The cost of this change is real and worth naming: the buffer is
+// spent. Week 15's light days have to stay light, and there is no room left to
+// absorb another missed block before test day. If Alex would rather have a full
+// re-entry week AND a full peak week, the fix is moving the test to Sep 27 -
+// strength residuals hold well past a week - not compressing both into eleven days.
+
+const PROGRAM_PLAN_VERSION = 7;
 
 const PROGRAM_PLAN = {
   name: "Powerlifting v3.1 — Max Strength",
@@ -153,7 +177,7 @@ const PROGRAM_PLAN = {
     { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Sun Aug 16 after ~10 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
     { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "ACTUAL: bench 315 × 1 PAUSED (prescribed single was 285) and squat 500 × 1 @ RPE 9.5 (prescribed 1×2 @ 420). Both far over block spec — an unplanned max test four weeks early. Squat 1RM input updated 478 → 500; bench held at 315. Loads below are what was prescribed, kept as history." },
     { week: 13, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 70,   load: 220 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 67.5, load: 340 }, squatBO: null,                                  note: "MINI DELOAD (was a Bridge week). Week 12 was an unplanned max — 500 squat at RPE 9.5 and a paused 315 bench — which already beat every number this week was going to ask for, so there is nothing left to build and plenty to recover from. Heavy singles and back-offs are deleted: 3×5 at RPE ≤ 6, half the accessory sets, no PRs. Loads sit above the usual deload floor (70% / 67.5% rather than 62.5% / 62%) because peak week opens with a 93% bench and a 91.5% squat single and you should not walk into that flat. Away Tue–Thu, so the week is Mon and Fri with Saturday optional." },
-    { week: 14, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 460 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 390 }, note: "Volume −50%. Accessories −60%. Saturday off." },
+    { week: 14, block: "Peak",        rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 87.5, load: 275 }, benchBO: { sets: 2, reps: 3, pct: 78, load: 245 }, squat: { sets: 1, reps: 1, pct: 87,   load: 435 }, squatBO: { sets: 2, reps: 3, pct: 75, load: 375 }, note: "RE-ENTRY — dialed back from 295/460 @ RPE 9. Two training days in the last eleven and five straight off before today, so this week rehearses the heavy single instead of contesting it: one crisp single per lift at RPE ≤ 8, back-offs owned, volume still −50% and accessories −60%. Earn-it clause: if the top single moves at RPE ≤ 7.5, take ONE more — bench 285, squat 450 — and stop there. Week 15 openers are unchanged and become the first 93% exposure; that is the rehearsal that matters, ≥4 days clear of the test. Saturday off." },
     { week: 15, block: "Peak",        rpeCap: 9,   bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 2, pct: 75, load: 235 }, squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: { sets: 2, reps: 2, pct: 72, load: 360 }, note: "Volume −70%. Openers early in the week (≥4 days before test), then Friday is REST. Carb-load the final 3 days. Sleep is programming." },
     { week: 16, block: "Test",        rpeCap: 10,  bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: null,                                  squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: null,                                  note: "TEST — Sun Sep 20. Squat first, then bench (meet order). Full rest 5–8 min between attempts. Third attempts are earned: take the PR only if the second moved at ≤ RPE 9." },
   ],
@@ -289,9 +313,9 @@ const PROGRAM_CALENDAR = [
     days: [
       { d: 0, id: null, label: "Missed \u2014 heavy bench", kind: "off", required: false, note: "Skipped (busy). Moved to Wed." },
       { d: 1, id: null, label: "Missed \u2014 squat primary", kind: "off", required: false, note: "Skipped (busy). Moved to Thu." },
-      { d: 2, id: null, label: "Rest", kind: "rest", required: false, note: "Fourth straight day off since Fri Sep 4. That covers the deload week's RPE overshoot \u2014 peak week opens at full loads." },
-      { d: 3, id: "seed-sun-heavy-bench", label: "Heavy Bench (moved from Sun)", kind: "train", required: true, note: "2\u00d71 @ 295 PAUSED, RPE cap 9, then 2\u00d73 @ 250. Judge the RPE off the SECOND single \u2014 week 13 deliberately had no heavy single, so the first rep back will read half a point heavier than the load deserves. LOG THAT RPE: it closes the open bench-1RM question and sets Sunday's opener (RPE \u22648 \u2192 1RM 330, opener 305 \u00b7 RPE 8.5\u20139 \u2192 322.5, opener 300 \u00b7 RPE \u22659.5 \u2192 315, opener 295). Accessories \u221260%: chest-supported row 3\u00d76\u20138, behind-body cable curl 3\u00d710, pushdown 2\u00d78\u201310, face pull 2\u00d715. Drop the Larsen/Spoto work." },
-      { d: 4, id: "seed-mon-squat-primary", extraId: "seed-thu-squat-volume-posterior-arms", label: "Squat Single + Posterior/Arms (merged)", kind: "train", required: true, note: "460\u00d71 @ 91.5%, RPE cap 9, then 2\u00d73 @ 390. Last squat single was the 500 @ RPE 9.5 on Aug 28 and the wk-13 deload squat never ran, so Sep 4's 405\u00d73 @ RPE 8 is the reference \u2014 460 is a clean step off it. If it comes in over RPE 9, take Monday's opener at 455. Thursday's own day is merged in at peak size: leg press 2\u00d78, hip thrust 2\u00d76 @ RPE \u22647, leg curl 3\u00d710, preacher/spider 2\u00d710, reverse EZ 2\u00d712, anti-flexion core. Hinge stays the HIP THRUST \u2014 no RDLs until the back status is confirmed." },
+      { d: 2, id: null, label: "Rest", kind: "rest", required: false, note: "Fifth straight day off since Fri Sep 4, on top of five days off inside week 13 \u2014 two training days in eleven. That is why week 14 is re-entry loading rather than peak loading." },
+      { d: 3, id: "seed-sun-heavy-bench", label: "Heavy Bench (moved from Sun)", kind: "train", required: true, note: "275\u00d71 PAUSED at RPE cap 8, then 2\u00d73 @ 245. Dialed back from 295 \u2014 this is a re-entry single, not a contest. If 275 moves at RPE \u2264 7.5, take ONE more at 285 and stop; if it reads 8.5+, you learned something useful and Sunday's opener comes down. Log the RPE either way. At 275 it is a rustiness check, not a 1RM test \u2014 the bench-1RM question (315 vs 322.5 vs 330) now gets settled by Sunday's opener single, which is the better instrument anyway because it is the actual rehearsal. What today tells you: RPE \u2264 7.5 means the layoff cost nothing and Sunday runs at full opener; RPE 8.5+ means take Sunday at 290 and let the platform sort out the third attempt. Accessories \u221260%: chest-supported row 3\u00d76\u20138, behind-body cable curl 3\u00d710, pushdown 2\u00d78\u201310, face pull 2\u00d715. Drop the Larsen/Spoto work." },
+      { d: 4, id: "seed-mon-squat-primary", extraId: "seed-thu-squat-volume-posterior-arms", label: "Squat Single + Posterior/Arms (merged)", kind: "train", required: true, note: "435\u00d71 at RPE cap 8, then 2\u00d73 @ 375. Dialed back from 460. Sep 4's 405\u00d73 @ RPE 8 is the only recent reference and the wk-13 deload squat never ran, so 435 is a half-step rather than a full one. Earn-it clause: RPE \u2264 7.5 on 435 buys ONE single at 450, then stop. Monday's 465 opener is unchanged. Thursday's own day is merged in at peak size: leg press 2\u00d78, hip thrust 2\u00d76 @ RPE \u22647, leg curl 3\u00d710, preacher/spider 2\u00d710, reverse EZ 2\u00d712, anti-flexion core. Hinge stays the HIP THRUST \u2014 no RDLs until the back status is confirmed." },
       { d: 5, id: "seed-fri-speed-bench-pump", label: "Speed Bench + Pump", kind: "train", required: true, note: "4\u00d73 @ 225 (72%), <1s pause, move fast \u2014 bar speed, not stimulus, and it means 225. Sep 4's 'speed' bench ran 255/275/275 to RPE 8.5, which is a heavy triple wearing a speed day's name; two days out from an opener that only takes. Keep the session under 40 min. Pump work is the first thing to cut if anything aches." },
       { d: 6, id: null, label: "Rest", kind: "rest", required: false, note: "Saturday off as designed. Sunday opens week 15 on schedule." },
     ],
