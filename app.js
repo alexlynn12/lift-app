@@ -904,7 +904,7 @@
     const ps = programState();
     if (!ps) return [];
     if (ps.post) {
-      return [{ kind: "info", title: "Cycle complete", body: "Week 16 has passed — log your test-day maxes, then run the 6–8 week arm block before the next strength cycle." }];
+      return [{ kind: "info", title: "Cycle complete", body: `Week ${PROGRAM_PLAN.totalWeeks} has passed — log your test-day maxes, then run the 6–8 week arm block before the next strength cycle.` }];
     }
     const insights = [];
     const adjustments = state.settings.programAdjustments || {};
@@ -1100,7 +1100,7 @@
       return `
         <div class="card card-tap" data-action="go-analytics">
           <div style="font-weight:700;">Cycle complete 🎉</div>
-          <div class="small muted" style="margin-top:4px;">16 weeks done. Log your test maxes, then run the 6–8 wk arm block before the next cycle.</div>
+          <div class="small muted" style="margin-top:4px;">${PROGRAM_PLAN.totalWeeks} weeks done. Log your test maxes, then run the 6–8 wk arm block before the next cycle.</div>
         </div>`;
     }
     const row = ps.row;
@@ -1185,7 +1185,7 @@
         <div class="row" style="padding:6px 0; align-items:flex-start;">
           <div>
             <div class="row-title">${liftKeyName(liftKey)} · e1RM ${Math.round(tr.current)}</div>
-            <div class="tiny muted">Goal ${goalTxt} by wk 16 (from ${tr.base})${tr.projected ? ` · projecting ≈ ${Math.round(tr.projected)}` : ""}</div>
+            <div class="tiny muted">Goal ${goalTxt} by wk ${PROGRAM_PLAN.totalWeeks} (from ${tr.base})${tr.projected ? ` · projecting ≈ ${Math.round(tr.projected)}` : ""}</div>
           </div>
           <span class="badge ${STATUS_BADGE[tr.status]}">${STATUS_LABELS[tr.status]}</span>
         </div>`;

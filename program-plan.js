@@ -128,11 +128,33 @@
 // re-entry week AND a full peak week, the fix is moving the test to Sep 27 -
 // strength residuals hold well past a week - not compressing both into eleven days.
 
-const PROGRAM_PLAN_VERSION = 7;
+// 2026-09-09, third revision: TEST DAY MOVED Sun Sep 20 -> Sun Sep 27. The
+// previous revision bought a re-entry week by spending the peak, which left no
+// buffer and only one 93% exposure before test day. Adding a week buys back both:
+// the cycle is now 17 weeks and every block gets its full job.
+//
+//   wk 14  Sep 6-12   RE-ENTRY  275 / 435 @ RPE 8 (unchanged)
+//   wk 15  Sep 13-19  PEAK      295 x1 x2 / 460 x1 @ RPE 9, volume -50%
+//   wk 16  Sep 20-26  PEAK      openers 295 / 465 early, Fri rest, carb load
+//   wk 17  Sep 27     TEST      squat then bench, meet order
+//
+// Week 15 is the week 14 that was cut, restored intact. Week 16 is the old week
+// 15 taper, unchanged. Loads, percentages, the 315/500 inputs and the 465/500/515
+// and 295/312.5/322.5 attempt plans are all untouched - only the calendar moved.
+//
+// Gate between 14 and 15: roll into the 295/460 peak loads only if week 14's
+// re-entry singles moved at RPE <= 8. If they ground, repeat week 14 and let
+// week 16's openers be the only 93% work. Same rule week 11 ran on.
+//
+// Costs of the move, stated plainly: eleven days of extra training before the
+// test rather than a compressed taper, and the arm block slides a week. Strength
+// residuals hold 8+ weeks, so nothing banked in weeks 11-13 decays in that time.
+
+const PROGRAM_PLAN_VERSION = 8;
 
 const PROGRAM_PLAN = {
   name: "Powerlifting v3.1 — Max Strength",
-  totalWeeks: 16,
+  totalWeeks: 17,
   // Sunday of week 1. Week 9 opens Sat Jul 25 2026 per the vacation-adjusted
   // sheet, which anchors week 1 to May 31 2026.
   defaultStartDate: "2026-05-31",
@@ -144,7 +166,7 @@ const PROGRAM_PLAN = {
     // Original 470–485 was cleared in week 12. New job: hold 500, earn 515.
     squat: { lo: 500, hi: 515 },
   },
-  // Test-day attempt plan (week 16): opener / second / third (earned PR).
+  // Test-day attempt plan (week 17): opener / second / third (earned PR).
   attemptPlan: {
     bench: [295, 312.5, 322.5],
     squat: [465, 500, 515],
@@ -177,9 +199,10 @@ const PROGRAM_PLAN = {
     { week: 11, block: "Bridge",      rpeCap: 7.5, bench: { sets: 1, reps: 1, pct: 88,   load: 275 }, benchBO: { sets: 3, reps: 5, pct: 75, load: 235 }, squat: { sets: 1, reps: 2, pct: 86,   load: 410 }, squatBO: { sets: 3, reps: 5, pct: 74, load: 355 }, note: "RE-ENTRY week — resume Sun Aug 16 after ~10 days off. Cap every top set at RPE 7.5. Own the back-offs; lighten or skip the heavy single until bar speed returns. Roll into wk-12 loads only if the singles felt normal — otherwise repeat this week." },
     { week: 12, block: "Bridge",      rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 90,   load: 285 }, benchBO: { sets: 3, reps: 5, pct: 76, load: 240 }, squat: { sets: 1, reps: 2, pct: 88,   load: 420 }, squatBO: { sets: 3, reps: 5, pct: 75, load: 360 }, note: "ACTUAL: bench 315 × 1 PAUSED (prescribed single was 285) and squat 500 × 1 @ RPE 9.5 (prescribed 1×2 @ 420). Both far over block spec — an unplanned max test four weeks early. Squat 1RM input updated 478 → 500; bench held at 315. Loads below are what was prescribed, kept as history." },
     { week: 13, block: "Deload",      rpeCap: 6,   bench: { sets: 3, reps: 5, pct: 70,   load: 220 }, benchBO: null,                                  squat: { sets: 3, reps: 5, pct: 67.5, load: 340 }, squatBO: null,                                  note: "MINI DELOAD (was a Bridge week). Week 12 was an unplanned max — 500 squat at RPE 9.5 and a paused 315 bench — which already beat every number this week was going to ask for, so there is nothing left to build and plenty to recover from. Heavy singles and back-offs are deleted: 3×5 at RPE ≤ 6, half the accessory sets, no PRs. Loads sit above the usual deload floor (70% / 67.5% rather than 62.5% / 62%) because peak week opens with a 93% bench and a 91.5% squat single and you should not walk into that flat. Away Tue–Thu, so the week is Mon and Fri with Saturday optional." },
-    { week: 14, block: "Peak",        rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 87.5, load: 275 }, benchBO: { sets: 2, reps: 3, pct: 78, load: 245 }, squat: { sets: 1, reps: 1, pct: 87,   load: 435 }, squatBO: { sets: 2, reps: 3, pct: 75, load: 375 }, note: "RE-ENTRY — dialed back from 295/460 @ RPE 9. Two training days in the last eleven and five straight off before today, so this week rehearses the heavy single instead of contesting it: one crisp single per lift at RPE ≤ 8, back-offs owned, volume still −50% and accessories −60%. Earn-it clause: if the top single moves at RPE ≤ 7.5, take ONE more — bench 285, squat 450 — and stop there. Week 15 openers are unchanged and become the first 93% exposure; that is the rehearsal that matters, ≥4 days clear of the test. Saturday off." },
-    { week: 15, block: "Peak",        rpeCap: 9,   bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 2, pct: 75, load: 235 }, squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: { sets: 2, reps: 2, pct: 72, load: 360 }, note: "Volume −70%. Openers early in the week (≥4 days before test), then Friday is REST. Carb-load the final 3 days. Sleep is programming." },
-    { week: 16, block: "Test",        rpeCap: 10,  bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: null,                                  squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: null,                                  note: "TEST — Sun Sep 20. Squat first, then bench (meet order). Full rest 5–8 min between attempts. Third attempts are earned: take the PR only if the second moved at ≤ RPE 9." },
+    { week: 14, block: "Peak",        rpeCap: 8,   bench: { sets: 1, reps: 1, pct: 87.5, load: 275 }, benchBO: { sets: 2, reps: 3, pct: 78, load: 245 }, squat: { sets: 1, reps: 1, pct: 87,   load: 435 }, squatBO: { sets: 2, reps: 3, pct: 75, load: 375 }, note: "RE-ENTRY — dialed back from 295/460 @ RPE 9. Two training days in the last eleven and five straight off before today, so this week rehearses the heavy single instead of contesting it: one crisp single per lift at RPE ≤ 8, back-offs owned, volume still −50% and accessories −60%. Earn-it clause: if the top single moves at RPE ≤ 7.5, take ONE more — bench 285, squat 450 — and stop there. Test day moved Sep 20 → Sep 27 so this re-entry week does not eat the peak: week 15 is now the full peak week (295 double / 460 single) and week 16 carries the openers. Saturday off." },
+    { week: 15, block: "Peak",        rpeCap: 9,   bench: { sets: 2, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 3, pct: 80, load: 250 }, squat: { sets: 1, reps: 1, pct: 91.5, load: 460 }, squatBO: { sets: 2, reps: 3, pct: 78, load: 390 }, note: "FULL PEAK WEEK — this is the week 14 was supposed to be, restored by moving test day to Sep 27. Volume −50%. Accessories −60%. Saturday off. Roll into these loads only if week 14's re-entry singles moved at RPE ≤ 8; if they ground, repeat week 14 instead and let week 16 be the only 93% work." },
+    { week: 16, block: "Peak",        rpeCap: 9,   bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: { sets: 2, reps: 2, pct: 75, load: 235 }, squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: { sets: 2, reps: 2, pct: 72, load: 360 }, note: "Volume −70%. Openers early in the week (≥4 days before test), then Friday is REST. Carb-load the final 3 days. Sleep is programming." },
+    { week: 17, block: "Test",        rpeCap: 10,  bench: { sets: 1, reps: 1, pct: 93,   load: 295 }, benchBO: null,                                  squat: { sets: 1, reps: 1, pct: 93,   load: 465 }, squatBO: null,                                  note: "TEST — Sun Sep 27. Squat first, then bench (meet order). Full rest 5–8 min between attempts. Third attempts are earned: take the PR only if the second moved at ≤ RPE 9." },
   ],
 };
 
@@ -320,13 +343,16 @@ const PROGRAM_CALENDAR = [
       { d: 6, id: null, label: "Rest", kind: "rest", required: false, note: "Saturday off as designed. Sunday opens week 15 on schedule." },
     ],
   },
-  // Week 15: openers early, Friday is rest — nothing hard inside 72 h of test.
+  // Week 15: the full peak week, restored by moving test day to Sep 27.
+  // Standard Sun/Mon/Wed/Thu/Fri mapping, Saturday off.
+  { week: 15, offset: 105, length: 7 },
+  // Week 16: openers early, Friday is rest — nothing hard inside 72 h of test.
   {
-    week: 15, offset: 105, length: 7,
+    week: 16, offset: 112, length: 7,
     label: "Peak — openers early, then rest",
     days: [
       { d: 0, id: "seed-sun-heavy-bench",                 label: "Bench Opener",            kind: "train", required: true,  note: "One crisp single @ 93% ≈ 295 — this is your opener. If it grinds, the opener comes down." },
-      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Opener",            kind: "train", required: true,  note: "Single @ 93% ≈ 445 — your opener, ≥4 days before test day." },
+      { d: 1, id: "seed-mon-squat-primary",               label: "Squat Opener",            kind: "train", required: true,  note: "Single @ 93% ≈ 465 — your opener, ≥4 days before test day. Attempts: 465 / 500 / 515." },
       { d: 2, id: null,                                   label: "Rest",                    kind: "rest",  required: false },
       { d: 3, id: "seed-wed-secondary-press-arms",        label: "Light Press + Arms",      kind: "train", required: true,  note: "Volume −70%. Movement, not stimulus." },
       { d: 4, id: "seed-thu-squat-volume-posterior-arms", label: "Light Squat + Posterior", kind: "train", required: false, note: "Optional and light. Nothing hard inside 72 h of test day." },
@@ -334,10 +360,10 @@ const PROGRAM_CALENDAR = [
       { d: 6, id: null,                                   label: "Rest",                    kind: "rest",  required: false },
     ],
   },
-  // Week 16: TEST — Sun Sep 20, squat then bench.
+  // Week 17: TEST — Sun Sep 27, squat then bench.
   {
-    week: 16, offset: 112, length: 7,
-    label: "TEST — Sun Sep 20",
+    week: 17, offset: 119, length: 7,
+    label: "TEST — Sun Sep 27",
     days: [
       { d: 0, id: "seed-mon-squat-primary", extraId: "seed-sun-heavy-bench", label: "TEST DAY — squat, then bench", kind: "test", required: true, note: "Meet order: squat first, then bench. Full rest 5–8 min between attempts. Third attempts are earned — only if the second moved at ≤ RPE 9." },
       { d: 1, id: null, label: "Rest", kind: "rest", required: false, note: "Log your test maxes, then run the 6–8 week arm block before the next strength cycle." },
@@ -374,7 +400,7 @@ function planDayOffset(startDateIso, nowMs) {
   return Math.floor((now - start) / 86400000);
 }
 
-// Program week number for a date. 1..16 during the cycle, 0 before the start
+// Program week number for a date. 1..17 during the cycle, 0 before the start
 // date, 17 after test week. Week boundaries come from PROGRAM_CALENDAR, so the
 // vacation stretch is respected.
 function planWeekNumber(startDateIso, nowMs) {

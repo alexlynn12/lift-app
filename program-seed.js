@@ -1,6 +1,6 @@
 // Pre-loaded training program — "Powerlifting v3.1 — Deadlift-Free Maximal Strength".
 // Source of truth: Powerlifting_Program_v3_1_MaxStrength, vacation-adjusted build (2026-07-25).
-// 16 weeks · Test week 16 = Sun Sep 20 2026 · Back cleared — RDLs allowed, no conventional
+// 17 weeks · Test week 17 = Sun Sep 27 2026 · Back cleared — RDLs allowed, no conventional
 // deadlifts by choice.
 //
 // These routines are the SHAPE of each session — the full exercise list off the sheet's
