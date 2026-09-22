@@ -1,125 +1,126 @@
-// Pre-loaded training program — "Powerlifting v3.1 — Deadlift-Free Maximal Strength".
-// Source of truth: Powerlifting_Program_v3_1_MaxStrength, vacation-adjusted build (2026-07-25).
-// 17 weeks · Test week 17 = Sun Sep 27 2026 · Back cleared — RDLs allowed, no conventional
-// deadlifts by choice.
+// Pre-loaded training program — "Powerbuilding v4.0 — Upper + Quad".
+// 16 weeks · starts Mon Sep 21 2026 · 5 days/week · no max test in this cycle.
 //
-// These routines are the SHAPE of each session — the full exercise list off the sheet's
-// "Daily Templates" tab. The numbers below are only a starting point: syncSeedRoutinesToPlan()
-// in app.js rewrites every set/rep/load from program-plan.js on each launch, so main lifts
-// track the weekly loading table and accessories follow the block (hypertrophy / strength /
-// bridge / peak / deload). Accessory LOADS are never overwritten — they carry over from the
-// last logged session so double progression keeps working.
+// Replaces "Powerlifting v3.1 — Deadlift-Free Maximal Strength". Alex cancelled the
+// Sep 27 max test on 2026-09-21 — he had already maxed in week 12 of that cycle
+// (500 squat, 315 paused bench) — and asked for a powerbuilding block instead:
+// high-rep work for upper-body and quad size, strength held rather than chased.
 //
-// PROGRAM_SEED_VERSION is bumped whenever this file changes meaningfully; existing installs
-// then get their old seed-* routines replaced with these (user-created routines are untouched,
-// and workout history/PRs are never modified).
+// HOW STRENGTH IS HELD. Every comp-lift day opens with a heavy "primer" — one top
+// set in blocks A/B, three or four in block C — before the volume work. That is the
+// documented minimum effective dose for powerlifters (roughly 3–6 weekly sets above
+// 80% of 1RM at RPE 7.5–9.5 holds and even adds 1RM). The back-off sets behind it
+// are the size dose. Never skip the primer to save time; cut a back-off set instead.
 //
-// v3 changes: added the Wednesday pulling slot (lat pulldown) the 2026-07-15 audit called for —
-// weekly pulling was 7 sets, all on Sunday. Baseline numbers moved to week 9 (Strength).
+// STANDING CONSTRAINTS (unchanged from the injury log):
+//   • Lower back ACTIVE — no conventional deadlift, RDL, good morning, bent-over
+//     barbell row, or any unsupported loaded hinge. Every row here is chest-supported;
+//     the hinge slot is a hip thrust; core is anti-rotation only.
+//   • Right shoulder — subacromial pain pattern logged 2026-08-18. Alex asked
+//     (2026-09-21) for the plan to be built WITHOUT accommodations; he will modify it
+//     himself. Shoulder-friendly variants are listed on the sheet's Swap Options tab.
 //
-// Baseline shown = WEEK 9, Strength block · Bench 1RM 315 · Squat 1RM 478
-// (2026-08-29: squat input is now 500 — these seed numbers are only the first-launch
-//  placeholder; syncSeedRoutinesToPlan() overwrites them with the live week each launch.)
-//   Sun comp bench   3×2 @ 90%   = 285   (PAUSED, comp command)  RPE ≤ 8.5
-//   Mon comp squat   3×2 @ 87.5% = 420                           RPE ≤ 8.5
-//   Larsen/Spoto = −10% of the day's comp bench. Pause squat = −12% of comp squat.
-//   CGBP 78% bench ≈ 245 · Incline 70% ≈ 220 · Thu squat 75% ≈ 360 · Speed bench 70% = 220
-// Progression: add load only when the top set is at or under the RPE cap — the cap beats the
-// % ladder. Auto-drop: elbow ache OR Wed pressing RPE +1 over target → skip Fri (wks 1–10) or
-// drop Fri pump work only (wks 11–15); flagged again → cut triceps volume ~20%.
+// These routines are the SHAPE of each session. The numbers below are only a
+// first-launch placeholder: syncSeedRoutinesToPlan() in app.js rewrites every
+// set/rep/load from program-plan.js on each launch, so main lifts track the weekly
+// loading table and accessories follow the block tier (A/B/C/D). Accessory LOADS are
+// never overwritten — they carry over from the last logged session so double
+// progression keeps working.
 //
+// Baseline shown = WEEK 1, tier A · Bench 1RM 315 · Squat 1RM 500.
 // Weight is stored internally in POUNDS (the app converts for kg display).
-//
-// 2026-08-28/29: the squat 1RM input in program-plan.js went 478 → 500 (the
-// unplanned wk-12 max). That does not touch the squat numbers below — they are
-// scaffolding only, overwritten from program-plan.js on every launch per the
-// note above.
 
-const PROGRAM_SEED_VERSION = 3;
+const PROGRAM_SEED_VERSION = 4;
 
 const PROGRAM_SEED = [
   {
-    id: "seed-sun-heavy-bench",
-    name: "Sun · Heavy Bench",
+    id: "seed-sun-upper-power",
+    name: "Upper Power — Chest + Back",
     exercises: [
-      { exerciseId: "barbell-bench-press", note: "Wk 9 · Strength: 3×2 @ 285 · top set RPE ≤ 8.5 · PAUSED (comp command)",
-        sets: [ {weight:285,reps:2}, {weight:285,reps:2}, {weight:285,reps:2} ] },
-      { exerciseId: "larsen-spoto-press", note: "−10% of today's comp bench · 3×4 @ 255",
-        sets: [ {weight:255,reps:4}, {weight:255,reps:4}, {weight:255,reps:4} ] },
-      { exerciseId: "chest-supported-row", note: "Upper back · 4×6–8",
-        sets: [ {weight:"",reps:8}, {weight:"",reps:8}, {weight:"",reps:8}, {weight:"",reps:8} ] },
-      { exerciseId: "cable-curl", note: "Behind-body (stretch position) · 2×10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10} ] },
-      { exerciseId: "face-pull", note: "Shoulder health · 3×15",
+      { exerciseId: "barbell-bench-press", note: "Wk 1 · Hypertrophy: PRIMER 1x3 @ 260 · RPE <= 8 · PAUSED (comp command) · then back-offs 4x8 @ 215 · last set 1-2 RIR",
+        sets: [ {weight:260,reps:3}, {weight:215,reps:8}, {weight:215,reps:8}, {weight:215,reps:8}, {weight:215,reps:8} ] },
+      { exerciseId: "incline-dumbbell-press", note: "Chest - deep stretch, 2s eccentric · 3x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "chest-supported-row", note: "Back - chest stays on the pad (back-safe row) · 4x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "cable-crossover", note: "Chest - lengthened, let the arms travel behind the torso · 3x12–15",
         sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
-      { exerciseId: "triceps-pushdown", note: "3×8–10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
+      { exerciseId: "triceps-pushdown", note: "Triceps · 3x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "face-pull", note: "Rear delt / shoulder health · 3x15–20",
+        sets: [ {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20} ] },
     ],
   },
   {
-    id: "seed-mon-squat-primary",
-    name: "Mon · Squat Primary",
+    id: "seed-mon-lower-power",
+    name: "Lower Power — Squat + Quads",
     exercises: [
-      { exerciseId: "squat", note: "Wk 9 · Strength: 3×2 @ 420 · top set RPE ≤ 8.5 · no grinders",
-        sets: [ {weight:420,reps:2}, {weight:420,reps:2}, {weight:420,reps:2} ] },
-      { exerciseId: "pause-squat", note: "−12% of today's comp squat · 2×3 @ 370",
-        sets: [ {weight:370,reps:3}, {weight:370,reps:3} ] },
-      { exerciseId: "leg-press", note: "2×8",
-        sets: [ {weight:"",reps:8}, {weight:"",reps:8} ] },
-      { exerciseId: "ab-wheel-rollout", note: "Anti-flexion core (or Pallof press) · 3 sets",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-    ],
-  },
-  {
-    id: "seed-wed-secondary-press-arms",
-    name: "Wed · Secondary Press + Arms",
-    exercises: [
-      { exerciseId: "close-grip-bench-press", note: "~78% of bench 1RM · 4×4 @ 245",
-        sets: [ {weight:245,reps:4}, {weight:245,reps:4}, {weight:245,reps:4}, {weight:245,reps:4} ] },
-      { exerciseId: "incline-barbell-bench-press", note: "~70% of bench 1RM · 3×5 @ 220",
-        sets: [ {weight:220,reps:5}, {weight:220,reps:5}, {weight:220,reps:5} ] },
-      { exerciseId: "lat-pulldown", note: "Weekly pulling (or chest-supported row) · 3×8",
-        sets: [ {weight:"",reps:8}, {weight:"",reps:8}, {weight:"",reps:8} ] },
-      { exerciseId: "incline-dumbbell-curl", note: "Stretch — 2s eccentric, full stretch · 3×8–10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-      { exerciseId: "hammer-curl", note: "3×10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-      { exerciseId: "overhead-triceps-extension", note: "Long head · 3×10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-    ],
-  },
-  {
-    id: "seed-thu-squat-volume-posterior-arms",
-    name: "Thu · Squat Volume + Posterior + Arms",
-    exercises: [
-      { exerciseId: "pause-squat", note: "High-bar or pause · ~75% of squat 1RM · 3×5 @ 360 · RPE ≤ 8",
-        sets: [ {weight:360,reps:5}, {weight:360,reps:5}, {weight:360,reps:5} ] },
-      // 2026-08-29: RDL swapped for hip thrust while the lower-back status is
-      // unresolved (sheet says cleared, 2026-08-18 injury log says active).
-      { exerciseId: "hip-thrust", note: "Hinge — RPE ≤ 7, never a max · 3×6 · RDL substitute until the back is confirmed clear",
-        sets: [ {weight:"",reps:6}, {weight:"",reps:6}, {weight:"",reps:6} ] },
-      { exerciseId: "leg-curl", note: "3×10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-      { exerciseId: "preacher-curl", note: "Or spider curl — short-length/peak · 3×10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-      { exerciseId: "reverse-curl", note: "Reverse EZ — brachialis/forearm · 2×12",
-        sets: [ {weight:"",reps:12}, {weight:"",reps:12} ] },
-      { exerciseId: "skull-crusher", note: "Or pushdown · 3×8–10",
-        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
-    ],
-  },
-  {
-    id: "seed-fri-speed-bench-pump",
-    name: "Fri · Speed Bench + Pump (bonus)",
-    exercises: [
-      { exerciseId: "barbell-bench-press", note: "Speed — 70% (220), <1s pause, move fast · 6×3 · Bonus day: skip if elbows ache or Wed pressing ran heavy",
-        sets: [ {weight:220,reps:3}, {weight:220,reps:3}, {weight:220,reps:3}, {weight:220,reps:3}, {weight:220,reps:3}, {weight:220,reps:3} ] },
-      { exerciseId: "push-up", note: "Or band flye · 2×15",
+      { exerciseId: "squat", note: "Wk 1 · Hypertrophy: PRIMER 1x3 @ 400 · RPE <= 8 · comp stance and depth · then back-offs 4x8 @ 325 · last set 1-2 RIR",
+        sets: [ {weight:400,reps:3}, {weight:325,reps:8}, {weight:325,reps:8}, {weight:325,reps:8}, {weight:325,reps:8} ] },
+      { exerciseId: "leg-press", note: "Quads - feet low and narrow, knees travel, deep as the back allows · 2x10–15",
         sets: [ {weight:"",reps:15}, {weight:"",reps:15} ] },
-      { exerciseId: "ez-bar-curl", note: "21s — 7 bottom-half + 7 top-half + 7 full · 2 rounds",
-        sets: [ {weight:"",reps:21}, {weight:"",reps:21} ] },
-      { exerciseId: "rope-pushdown", note: "2×12",
-        sets: [ {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "seated-leg-curl", note: "Hamstrings - seated beats lying for stretch · 3x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "calf-raise", note: "Calves - 2s pause in the stretch · 3x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "pallof-press", note: "Anti-rotation core - the only core pattern the back allows · 3x12/side",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+    ],
+  },
+  {
+    id: "seed-wed-upper-push",
+    name: "Upper Hypertrophy — Push, Delts, Arms",
+    exercises: [
+      { exerciseId: "close-grip-bench-press", note: "Triceps + bench carryover - load is a % of bench 1RM, see the Load column · 4x6-8 @ 225 (~72% of bench 1RM)",
+        sets: [ {weight:225,reps:8}, {weight:225,reps:8}, {weight:225,reps:8}, {weight:225,reps:8} ] },
+      { exerciseId: "incline-barbell-bench-press", note: "Upper chest - load is a % of bench 1RM, see the Load column · 3x8-12 @ 185 (~57% of bench 1RM)",
+        sets: [ {weight:185,reps:12}, {weight:185,reps:12}, {weight:185,reps:12} ] },
+      { exerciseId: "cable-lateral-raise", note: "Side delts - cable = dumbbell for growth, pick what feels better · 4x12–20",
+        sets: [ {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20} ] },
+      { exerciseId: "overhead-cable-extension", note: "Triceps LONG HEAD - overhead beats pushdowns, this slot is not optional · 4x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "incline-dumbbell-curl", note: "Biceps - stretched position, 2s eccentric · 4x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "reverse-pec-deck", note: "Rear delts · 3x15–20",
+        sets: [ {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20} ] },
+    ],
+  },
+  {
+    id: "seed-thu-lower-hyp",
+    name: "Lower Hypertrophy — Quads + Posterior",
+    exercises: [
+      { exerciseId: "hack-squat", note: "Quads - machine, minimal spinal load. Heaviest quad work of the week · 3x6–10",
+        sets: [ {weight:"",reps:10}, {weight:"",reps:10}, {weight:"",reps:10} ] },
+      { exerciseId: "bulgarian-split-squat", note: "Quads unilateral - torso upright, long stride · 3x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "leg-extension", note: "Quads - HIPS EXTENDED (recline the seat back). Hits rectus femoris, which squats and presses barely touch · 3x12–20",
+        sets: [ {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20} ] },
+      { exerciseId: "hip-thrust", note: "Glutes/hams - RPE <= 7, never a max. Hinge substitute while the back is active · 3x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "leg-curl", note: "Hamstrings · 3x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "seated-calf-raise", note: "Calves - soleus · 3x12–20",
+        sets: [ {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20} ] },
+    ],
+  },
+  {
+    id: "seed-fri-upper-pull",
+    name: "Upper Hypertrophy — Pull, Delts, Arms",
+    exercises: [
+      { exerciseId: "lat-pulldown", note: "Lats - full stretch at the top, no torso swing · 4x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "seated-cable-row", note: "Mid-back - chest-supported machine row is fine; no bent-over BB row · 4x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "seated-dumbbell-press", note: "Delts - seated with back support (standing axial load is out) · 3x8–12",
+        sets: [ {weight:"",reps:12}, {weight:"",reps:12}, {weight:"",reps:12} ] },
+      { exerciseId: "cable-lateral-raise", note: "Side delts - second exposure of the week · 4x12–20",
+        sets: [ {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20}, {weight:"",reps:20} ] },
+      { exerciseId: "preacher-curl", note: "Biceps short-length. Superset with the pushdown · 4x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "hammer-curl", note: "Brachialis/forearm - thickens the arm · 3x10–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
+      { exerciseId: "rope-pushdown", note: "Triceps finisher - superset with the preacher curl · 3x12–15",
+        sets: [ {weight:"",reps:15}, {weight:"",reps:15}, {weight:"",reps:15} ] },
     ],
   },
 ];

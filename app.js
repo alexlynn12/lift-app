@@ -697,8 +697,9 @@
       row: planWeekRow(clamped),
       weekStartMs: planWeekStartMs(startDate, week),
       weekEndMs: planWeekEndMs(startDate, week),
-      // The vacation-adjusted calendar: what TODAY actually is (training day,
-      // rest, travel, vacation or test day) rather than a fixed weekday map.
+      // The calendar decides what TODAY actually is (training day, rest, off)
+      // rather than a fixed weekday map, so a week can be reshaped without
+      // touching the loading table.
       day: planDayFor(startDate, Date.now()),
       dateRange: planWeekDateRangeText(startDate, clamped),
     };
@@ -800,9 +801,9 @@
     const expected = anchor + Math.max(0, requiredGain) * frac;
     const delta = current - expected;
     let status = delta >= 5 ? "ahead" : delta >= -7.5 ? "on-pace" : "behind";
-    // Deload / peak / test weeks train low-rep submax singles — e1RM
+    // Deload and re-express weeks run submax doubles at half the volume — e1RM
     // under-reads there by design, so don't call that "behind".
-    if (status === "behind" && ["Deload", "Peak", "Test"].includes(ps.row.block)) status = "on-pace";
+    if (status === "behind" && ["Deload", "Re-express"].includes(ps.row.block)) status = "on-pace";
     if (series.length < 3) status = "building"; // too little data to judge pace
     let projected = null;
     if (series.length >= 2) {
@@ -818,14 +819,13 @@
     return { liftKey, base, goal, current, anchor, expected, delta, status, projected };
   }
 
-  // Recent comp-lift sessions (the heavy Sun bench / Mon squat work — not
-  // Friday speed bench), newest first, each with the plan's target for the
-  // week it was logged in.
+  // Recent comp-lift sessions (the Sunday bench primer / Monday squat primer),
+  // newest first, each with the plan's target for the week it was logged in.
   function recentMainLiftSessions(liftKey, limit = 6) {
     const ps = programState();
     if (!ps) return [];
     const exId = liftKeyExerciseId(liftKey);
-    const compRoutine = liftKey === "bench" ? "seed-sun-heavy-bench" : "seed-mon-squat-primary";
+    const compRoutine = liftKey === "bench" ? "seed-sun-upper-power" : "seed-mon-lower-power";
     const out = [];
     for (const w of state.workouts) { // newest first
       const e = w.exercises.find((x) => x.exerciseId === exId);
@@ -871,14 +871,18 @@
     // any more now that a week can run 6, 8 or 15 days.
     const weekProgress = weekLen <= 1 ? 1 : dayIndex / (weekLen - 1);
     const arm = PROGRAM_PLAN.armSets;
-    const scale = ps.row.block === "Deload" ? 0.5 : 1;
+    // armScale is set per week in program-plan.js (0.5 on every tier-D week:
+    // the three deloads and the re-express week).
+    const scale = typeof ps.row.armScale === "number"
+      ? ps.row.armScale
+      : (ps.row.block === "Deload" ? 0.5 : 1);
     return {
       sessionsDone: days.size,
       sessionsRequired: required,
       dayOfWeek: dayIndex,
       weekProgress,
       weekLen,
-      trimmed: ps.row.block === "Peak" || ps.row.block === "Test",
+      trimmed: ps.row.tier === "D",
       biceps: { done: biceps, lo: Math.round(arm.biceps[0] * scale), hi: Math.round(arm.biceps[1] * scale) },
       triceps: { done: triceps, lo: Math.round(arm.triceps[0] * scale), hi: Math.round(arm.triceps[1] * scale) },
     };
@@ -920,7 +924,7 @@
       const name = liftKeyName(liftKey);
       const loggedRpe = typeof last.top.rpe === "number" ? last.top.rpe : (last.top.type === "failure" ? 10 : null);
       const cap = last.planTop.rpeCap;
-      if (loggedRpe != null && loggedRpe > cap && row.block !== "Test") {
+      if (loggedRpe != null && loggedRpe > cap) {
         const targetWeek = Math.min(last.week + 1, PROGRAM_PLAN.totalWeeks);
         const nextPlan = planTopSetFor(targetWeek, liftKey, adjustments);
         if (nextPlan.load > last.top.weight && !(adjustments[String(targetWeek)] || {})[liftKey]) {
@@ -932,7 +936,7 @@
             applyLabel: `Set wk ${targetWeek} to ${last.top.weight}`,
           });
         }
-      } else if (loggedRpe != null && loggedRpe <= cap - 1 && !["Deload", "Test"].includes(row.block)) {
+      } else if (loggedRpe != null && loggedRpe <= cap - 1 && !["Deload", "Re-express"].includes(row.block)) {
         const nxt = last.week < PROGRAM_PLAN.totalWeeks ? planTopSetFor(last.week + 1, liftKey, adjustments) : null;
         insights.push({
           kind: "good",
@@ -963,7 +967,7 @@
     const weekEnd = ps.weekEndMs;
     const wed = state.workouts.find((w) => {
       const t = new Date(w.date).getTime();
-      return w.routineId === "seed-wed-secondary-press-arms" && t >= ps.weekStartMs && t < weekEnd;
+      return w.routineId === "seed-wed-upper-push" && t >= ps.weekStartMs && t < weekEnd;
     });
     if (wed) {
       let topRpe = null;
@@ -977,58 +981,56 @@
         insights.push({
           kind: "warn",
           title: "Wed pressing ran heavy — auto-drop rule",
-          body: ps.clamped >= 11 && ps.clamped <= 15
-            ? `Pressing hit RPE ${topRpe} (target +1 over). Drop Friday's pump work but keep the 4×3 speed bench. Flagged again next week → cut triceps volume ~20%.`
-            : `Pressing hit RPE ${topRpe} (target +1 over). Skip Friday entirely this week. Flagged again next week → cut triceps volume ~20%.`,
+          body: `Pressing hit RPE ${topRpe} (target +1 over). Drop Friday's triceps finisher and take a set off the lateral raises — keep the pulling. Flagged again next week → cut direct triceps volume ~20% for the rest of the block.`,
         });
       }
     }
 
-    // Calendar heads-ups the vacation shift creates.
+    // Day-specific calendar notes (rest days carry their own coaching line).
     if (ps.day && ps.day.kind === "rest" && ps.day.note) {
       insights.push({ kind: "info", title: `Today: ${ps.day.label}`, body: ps.day.note });
     }
-    if (ps.clamped === 9) {
+    if (ps.clamped === 1) {
       insights.push({
         kind: "info",
-        title: "Week 9 is shifted — comp lifts land on the weekend",
-        body: "Heavy bench Sat Jul 25, squat primary Sun Jul 26, Mon Jul 27 off for the event. Both comp lifts are banked before the rest day, so nothing is lost. Next week's deload IS the trip.",
+        title: "New cycle — Powerbuilding v4.0",
+        body: "Sixteen weeks, five days, upper body and quads. Every bench and squat day opens with a heavy primer before the volume work — that single top set is what holds your 1RM while the rest of the session grows you. Week 1's job is learning the new lifts, not loading them: get the groove, log honest accessory weights, and let block B do the damage.",
       });
     }
-    if (ps.clamped === 10) {
-      insights.push({
-        kind: "warn",
-        title: "This deload is your vacation — don't do both",
-        body: "Three light sessions (Aug 2/3/5) at RPE ≤ 6 and half the accessory sets, then off Aug 6–15. A gym deload stacked on 10 days off is two deloads. Walk and eat; don't go find a gym.",
-      });
-    }
-    // Hinge conflict — stands until the back status is settled.
-    if (PROGRAM_PLAN.rules.hinge) {
-      insights.push({
-        kind: "warn",
-        title: "Hinge is a hip thrust — back status unresolved",
-        body: "The program sheet says the back is cleared and prescribes RDLs; your 2026-08-18 injury log lists the lower back as active with RDLs contraindicated. Until you confirm which is current, Thursday's hinge is a hip thrust — same posterior chain, no spinal loading. Tell me the back is clear and I'll put the RDL back.",
-      });
-    }
-    if (ps.clamped === 12) {
-      insights.push({
-        kind: "good",
-        title: "Squat PR banked — 500 × 1",
-        body: "500 at RPE 9.5 with comp depth is a 22 lb lifetime PR, and it came four weeks early on a week that asked for a 420 double. The 1RM input is now 500, so weeks 13–16 and your test-day attempts (465 / 500 / 515) all recalculated. Bench holds at 315 — the paused single made the max comp-legal, which is worth more than the number.",
-      });
-    }
-    if (ps.clamped === 13) {
+    if (ps.clamped === 4 || ps.clamped === 9) {
       insights.push({
         kind: "info",
-        title: "Mini deload — nothing to prove this week",
-        body: "This was a bridge week until week 12 turned into a max. You already beat every number it was going to ask for, so it is now 3×5 at RPE ≤ 6 with half the accessories: squat 340 Monday, paused bench 220 Friday, Saturday optional. The heavy singles are cancelled, not postponed. Peak week opens next Sunday with a 295 bench double and a 460 squat single — the job this week is to show up there fresh.",
+        title: `Bench 1RM checkpoint — ${planWeekRow(ps.clamped).bench.load}×${planWeekRow(ps.clamped).bench.reps} at RPE ≤ 8`,
+        body: "The bench input is still the conservative 315 because the RPE of the August paused single was never recorded. Log the RPE on today's primer: if it moves at 8 or under, the real max is higher and every load in the cycle is running light. This is the cheap way to settle it without a max attempt.",
+      });
+    }
+    if (planWeekRow(ps.clamped).tier === "B" && ps.clamped === 6) {
+      insights.push({
+        kind: "info",
+        title: "Block B — highest volume of the cycle",
+        body: "Accessory sets step up across the board and stay there for four weeks. Rotate at most ONE exercise per muscle now, and only if it stalled or a joint complained in block A — everything else keeps its double-progression history. If sleep or appetite starts sliding, hold loads instead of adding.",
       });
     }
     if (ps.clamped === 11) {
       insights.push({
+        kind: "info",
+        title: "Block C — the primer becomes the main event",
+        body: "Three to four heavy sets per comp lift instead of one, RPE cap up to 8.5, accessory sets down about 20%. Rest 3–4 minutes between primer sets; these are strength sets, not a circuit. This is the block where the size you built in A and B shows up as bar weight.",
+      });
+    }
+    if (ps.clamped === 16) {
+      insights.push({
         kind: "warn",
-        title: "Re-entry week — cap everything at RPE 7.5",
-        body: "You're back after ~10 days off: rusty, not weaker. Own the back-offs, lighten or skip the heavy single until bar speed is normal. Roll into week-12 loads only if the singles moved right — otherwise repeat this week. You have the slack.",
+        title: "Re-express week — this is not a max",
+        body: `One double per lift at 95% (${PROGRAM_PLAN.reExpress.bench} bench, ${PROGRAM_PLAN.reExpress.squat} squat), capped at RPE 8. Stop the set the moment bar speed drops. Log the RPE — it sets the 1RM inputs for the next cycle, and a double at a known RPE is a better estimate than a grinding single.`,
+      });
+    }
+    // Standing constraint, every week of the cycle.
+    if (PROGRAM_PLAN.rules.hinge) {
+      insights.push({
+        kind: "info",
+        title: "Back-safe by design — no hinge, no unsupported rows",
+        body: "Lower back is still listed active, so this program has no deadlift, RDL, good morning or bent-over barbell row anywhere in it. Thursday's hinge is a hip thrust at RPE ≤ 7, every row is chest-supported, and core is anti-rotation only. Tell me the back is cleared and the hinge slot opens back up.",
       });
     }
 
@@ -1037,13 +1039,10 @@
       const next = planWeekRow(ps.clamped + 1);
       if (next.block !== row.block) {
         const COPY = {
-          Deload: ps.clamped === 9
-            ? `Deload next week — and it's your trip. Light Sun/Mon/Wed (Aug 2/3/5) at ${next.bench.load}/${next.squat.load}, RPE ≤ 6, then fly Thursday. The vacation replaces the gym deload.`
-            : `Deload next week — ${next.bench.load}/${next.squat.load} top sets at RPE ≤ 6, 50% accessory sets, no PRs. Take it seriously; week ${ps.clamped + 5 <= 16 ? "after builds on it" : "16 is coming"}.`,
-          Strength: "Strength block starts next week — caps rise to RPE 8.5, arms drop to 14/16 weekly sets.",
-          Bridge: "Bridge block next week — single practice starts (heavy 1×1 plus 3×5 back-offs) and Friday speed bench becomes REQUIRED. Training resumes Sun Aug 16 at RPE 7.5 caps, back on the standard Sun–Fri split.",
-          Peak: "Peaking next week — volume −50%, accessories −60%. The strength is built; now you're just sharpening.",
-          Test: `Test week next week — openers ${PROGRAM_PLAN.attemptPlan.bench[0]} bench / ${PROGRAM_PLAN.attemptPlan.squat[0]} squat. Squat first, then bench. Nothing hard inside 72 h, carb up, sleep is programming.`,
+          Deload: `Deload next week — ${next.bench.load}/${next.squat.load} straight sets at RPE ≤ 6, no primers, half the accessory sets, no PRs. It is not a make-up week. This is where the last block turns into muscle.`,
+          Hypertrophy: "Accumulation block next week — accessory volume steps up and the primer stays a single heavy top set. Growth comes from the back-offs; the primer just keeps the 1RM honest.",
+          Strength: "Intensification next week — the primer becomes three to four heavy sets, the RPE cap goes to 8.5, and accessory sets come down about 20%. Nothing gets deleted, it gets re-weighted.",
+          "Re-express": `Re-express week next — one double per lift at 95% (${PROGRAM_PLAN.reExpress.bench} / ${PROGRAM_PLAN.reExpress.squat}), RPE cap 8, then light back-offs. Not a max attempt: log the RPE and it sets the next cycle's inputs.`,
         };
         if (COPY[next.block]) insights.push({ kind: "info", title: `${next.block} — week ${ps.clamped + 1}`, body: COPY[next.block] });
       }
@@ -1105,9 +1104,9 @@
     }
     const row = ps.row;
     const today = new Date().getDay();
-    // The calendar decides what today is — the vacation shift moves sessions
-    // off their usual weekdays (bench to Saturday in wk 9) and blanks out the
-    // trip entirely.
+    // The calendar decides what today is — a week override can move sessions
+    // off their usual weekdays. v4 uses plain Sun–Sat weeks, so today is just
+    // the weekday map unless a week is given an explicit `days` override.
     const day = ps.day;
     let todayHtml;
     if (day && day.routineId) {
@@ -1119,7 +1118,7 @@
         const main = firstId ? t[firstId] : null;
         const mainEx = firstId ? exerciseById(firstId) : null;
         return main && mainEx
-          ? `<div class="small muted" style="margin-top:2px;">${escapeHtml(mainEx.name)} ${summarizeSets(main.sets)}${row.block !== "Test" ? ` · RPE ≤ ${row.rpeCap}` : ""}</div>`
+          ? `<div class="small muted" style="margin-top:2px;">${escapeHtml(mainEx.name)} ${summarizeSets(main.sets)}${` · RPE ≤ ${row.rpeCap}`}</div>`
           : "";
       }).join("");
       todayHtml = `
@@ -1737,7 +1736,7 @@
   // original order after the seeded ones.
   function orderedHomeRoutines() {
     const seedOrder = typeof PLAN_DAYS !== "undefined" ? PLAN_DAYS.map((d) => d.routineId) : [];
-    // Today's session comes from the calendar (which honors the vacation
+    // Today's session comes from the calendar (which honors any week
     // shift), falling back to the plain weekday map if program tracking is off.
     const ps = programState();
     let todayIds = [];
@@ -2584,15 +2583,15 @@
         <h3>Program</h3>
         <div class="card">
           <div class="row">
-            <span>Cycle start (week-1 Sunday)</span>
+            <span>Cycle start (day 1)</span>
             <input type="date" data-action="set-program-start" value="${s.programStartDate || ""}"
               style="border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface); font-weight:700;" />
           </div>
           <div class="tiny muted" style="margin-top:8px;">
             ${ps ? (ps.post
-              ? "The 16-week cycle is complete."
-              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. The vacation-adjusted calendar (wk 9 opens Sat Jul 25, wk 10 absorbs the Aug 6–15 trip, training resumes Sun Aug 16, test day Sun Sep 20) is built in. Squat 1RM input is 500 and bench 315 as of the 2026-08-29 PR update.`)
-              : "Set the Sunday your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
+              ? "The 16-week cycle is complete. Feed week 16's re-express doubles into the 1RM inputs and start the next block."
+              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. Powerbuilding v4.0: week 1 is a compressed six-day start (days 1–5 straight, Mon Sep 21 – Fri Sep 25), then plain Sun–Sat weeks with five required sessions (Sun/Mon/Wed/Thu/Fri). Deloads in weeks 5, 10 and 15; week 16 is a re-express double, not a max test. Squat 1RM input is ${PROGRAM_PLAN.oneRm.squat} and bench ${PROGRAM_PLAN.oneRm.bench}.`)
+              : "Set the day your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
           </div>
           ${ps && !ps.post ? `
           <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
