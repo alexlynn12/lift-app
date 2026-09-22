@@ -30,7 +30,7 @@
 // Baseline shown = WEEK 1, tier A · Bench 1RM 315 · Squat 1RM 500.
 // Weight is stored internally in POUNDS (the app converts for kg display).
 
-const PROGRAM_SEED_VERSION = 4;
+const PROGRAM_SEED_VERSION = 5;
 
 const PROGRAM_SEED = [
   {
@@ -55,8 +55,8 @@ const PROGRAM_SEED = [
     id: "seed-mon-lower-power",
     name: "Lower Power — Squat + Quads",
     exercises: [
-      { exerciseId: "squat", note: "Wk 1 · Hypertrophy: PRIMER 1x3 @ 400 · RPE <= 8 · comp stance and depth · then back-offs 4x8 @ 325 · last set 1-2 RIR",
-        sets: [ {weight:400,reps:3}, {weight:325,reps:8}, {weight:325,reps:8}, {weight:325,reps:8}, {weight:325,reps:8} ] },
+      { exerciseId: "squat", note: "Wk 1 · Hypertrophy: PRIMER 1x3 @ 400 · RPE <= 8 · comp stance and depth · then back-offs 4x5 @ 325 · last set 1-2 RIR",
+        sets: [ {weight:400,reps:3}, {weight:325,reps:5}, {weight:325,reps:5}, {weight:325,reps:5}, {weight:325,reps:5} ] },
       { exerciseId: "leg-press", note: "Quads - feet low and narrow, knees travel, deep as the back allows · 2x10–15",
         sets: [ {weight:"",reps:15}, {weight:"",reps:15} ] },
       { exerciseId: "seated-leg-curl", note: "Hamstrings - seated beats lying for stretch · 3x10–15",

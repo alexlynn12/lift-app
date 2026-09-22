@@ -33,6 +33,13 @@
 //     the primer into multiple heavy sets.
 //   • Accessory volume is keyed off a per-week TIER (A/B/C/D) rather than the block
 //     name, because blocks A and B are both "Hypertrophy" at different volumes.
+//   • SQUAT BACK-OFFS ARE CAPPED AT 4x5 (Alex, 2026-09-21 - he does not tolerate more
+//     squat volume than that). They were 4x8/4x7/4x6 on the first build. Blocks A and
+//     B now progress by load at a fixed 4x5, block C trims to 3x5/3x4/3x3 as the
+//     primer climbs. Peak Monday squat volume went 35 reps -> 23. The quad SET count
+//     barely moved, so the volume landmarks still hold; what came off is tonnage and
+//     systemic fatigue, which is what he was actually complaining about. Bench is
+//     unchanged - the cap is squat-specific.
 //   • Speed bench, Larsen press and the Thursday pause squat are gone. Thursday's quad
 //     work is machine-based on purpose — quad volume without a second heavy axial load
 //     on an active lower back.
@@ -65,7 +72,7 @@
 // 10 -> 315). Week 4's 285x2 and week 9's 290x2, both capped at RPE 8, are the
 // instruments that settle it. Log the RPE and update oneRm.bench.
 
-const PROGRAM_PLAN_VERSION = 9;
+const PROGRAM_PLAN_VERSION = 10;
 
 const PROGRAM_PLAN = {
   name: "Powerbuilding v4.0 — Upper + Quad",
@@ -91,6 +98,7 @@ const PROGRAM_PLAN = {
     primer: "Every comp-lift day opens with a heavy primer before the volume work. That is the strength dose - roughly 3-6 weekly sets above 80% at RPE 7.5-9.5 is what holds a 1RM. Never skip it to save time; cut a back-off set instead.",
     progression: "Add load only when the top set is at or under the RPE cap. The cap beats the % ladder: if last week's top set exceeded it, repeat that load.",
     backOffs: "Back-off sets end 1-2 reps in reserve. The % is a starting point; the RPE governs.",
+    squatVolume: "HARD CAP, set by Alex on 2026-09-21: squat back-offs never exceed 4 sets of 5. His words - his body does not tolerate that volume. Blocks A and B progress by LOAD at a fixed 4x5; block C trims to 3x5, 3x4, 3x3 as the primer gets heavy. Do not add reps or sets back in. If quad stimulus feels short, buy it on Monday leg press or Thursday hack squat - machine work at a fraction of the systemic cost - never on the barbell squat.",
     accessories: "Double progression. Hit the TOP of the printed rep range on every set, then add load: 2.5-5 lb upper isolation, 5 lb upper compound, 10 lb lower. Last set 0-2 reps in reserve.",
     fatigue: "2 sessions in a row over target RPE -> pull the week's loads 5%. Sleep or appetite sliding in block B -> hold loads, do not add.",
     deloads: "Weeks 5, 10 and 15 are mandatory: half the accessory sets, no primers, no PRs, no make-up work.",
@@ -106,19 +114,19 @@ const PROGRAM_PLAN = {
   weeks: [
     { week: 1,  block: "Hypertrophy", tier: "A", rpeCap: 8,
       bench: { sets: 1, reps: 3, pct: 82.5, load: 260 }, benchBO: { sets: 4, reps: 8, pct: 67.5, load: 215 },
-      squat: { sets: 1, reps: 3, pct: 80.0, load: 400 }, squatBO: { sets: 4, reps: 8, pct: 65.0, load: 325 },
+      squat: { sets: 1, reps: 3, pct: 80.0, load: 400 }, squatBO: { sets: 4, reps: 5, pct: 65.0, load: 325 },
       note: "Block A wk1 - Accumulation I. COMPRESSED START: days 1-5 run Mon Sep 21 through Fri Sep 25 with no mid-week rest, Sat off, then the normal Sun-start week begins Sep 27. Five straight days is the one thing this cycle asks that the rest of it does not - it works because week 1 is the lightest week (82.5% primer, 67.5% back-offs) and the job is learning the new lifts, not loading them. If day 4 or 5 feels flat, drop an accessory set rather than the primer. Back-offs: last set 1-2 reps in reserve." },
     { week: 2,  block: "Hypertrophy", tier: "A", rpeCap: 8,
       bench: { sets: 1, reps: 3, pct: 85.0, load: 270 }, benchBO: { sets: 4, reps: 8, pct: 70.0, load: 220 },
-      squat: { sets: 1, reps: 3, pct: 82.5, load: 415 }, squatBO: { sets: 4, reps: 8, pct: 67.5, load: 340 },
+      squat: { sets: 1, reps: 3, pct: 82.5, load: 415 }, squatBO: { sets: 4, reps: 5, pct: 67.5, load: 340 },
       note: "Block A wk2. Same sets, +2.5% everywhere. Log accessory loads this week - block B's double progression runs off them." },
     { week: 3,  block: "Hypertrophy", tier: "A", rpeCap: 8,
       bench: { sets: 1, reps: 2, pct: 87.5, load: 275 }, benchBO: { sets: 4, reps: 7, pct: 72.5, load: 230 },
-      squat: { sets: 1, reps: 2, pct: 85.0, load: 425 }, squatBO: { sets: 4, reps: 7, pct: 70.0, load: 350 },
+      squat: { sets: 1, reps: 2, pct: 85.0, load: 425 }, squatBO: { sets: 4, reps: 5, pct: 70.0, load: 350 },
       note: "Block A wk3. Primer drops to a double as the % climbs. Back-offs lose a rep, gain load." },
     { week: 4,  block: "Hypertrophy", tier: "A", rpeCap: 8,
       bench: { sets: 1, reps: 2, pct: 90.0, load: 285 }, benchBO: { sets: 5, reps: 6, pct: 75.0, load: 235 },
-      squat: { sets: 1, reps: 2, pct: 87.5, load: 440 }, squatBO: { sets: 4, reps: 6, pct: 72.5, load: 365 },
+      squat: { sets: 1, reps: 2, pct: 87.5, load: 440 }, squatBO: { sets: 4, reps: 5, pct: 72.5, load: 365 },
       note: "Block A wk4 - heaviest accumulation week. The 90% bench double at RPE <= 8 is your first read on whether the bench 1RM input (315) is honest." },
     { week: 5,  block: "Deload",      tier: "D", rpeCap: 6, armScale: 0.5,
       bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,
@@ -126,19 +134,19 @@ const PROGRAM_PLAN = {
       note: "DELOAD. No primers, half the accessory sets, zero PRs. Loads are a walk. This is where block A turns into muscle." },
     { week: 6,  block: "Hypertrophy", tier: "B", rpeCap: 8,
       bench: { sets: 1, reps: 3, pct: 85.0, load: 270 }, benchBO: { sets: 5, reps: 8, pct: 70.0, load: 220 },
-      squat: { sets: 1, reps: 3, pct: 82.5, load: 415 }, squatBO: { sets: 4, reps: 8, pct: 67.5, load: 340 },
+      squat: { sets: 1, reps: 3, pct: 82.5, load: 415 }, squatBO: { sets: 4, reps: 5, pct: 70.0, load: 350 },
       note: "Block B wk6 - Accumulation II, the highest-volume block of the cycle. Exercise rotation: swap ONE slot per muscle if a lift stalled or a joint complained in block A, keep the rest." },
     { week: 7,  block: "Hypertrophy", tier: "B", rpeCap: 8,
       bench: { sets: 1, reps: 3, pct: 87.5, load: 275 }, benchBO: { sets: 5, reps: 8, pct: 72.5, load: 230 },
-      squat: { sets: 1, reps: 3, pct: 85.0, load: 425 }, squatBO: { sets: 4, reps: 7, pct: 70.0, load: 350 },
-      note: "Block B wk7. Squat back-offs add a set. If sleep or appetite slides this week, that is the volume talking - hold loads instead of adding." },
+      squat: { sets: 1, reps: 3, pct: 85.0, load: 425 }, squatBO: { sets: 4, reps: 5, pct: 72.5, load: 365 },
+      note: "Block B wk7. Squat back-offs hold at 4x5 and gain load instead of reps - that cap is permanent. If sleep or appetite slides this week, that is the volume talking: hold loads instead of adding." },
     { week: 8,  block: "Hypertrophy", tier: "B", rpeCap: 8,
       bench: { sets: 1, reps: 2, pct: 90.0, load: 285 }, benchBO: { sets: 5, reps: 7, pct: 75.0, load: 235 },
-      squat: { sets: 1, reps: 2, pct: 87.5, load: 440 }, squatBO: { sets: 4, reps: 6, pct: 72.5, load: 365 },
+      squat: { sets: 1, reps: 2, pct: 87.5, load: 440 }, squatBO: { sets: 4, reps: 5, pct: 75.0, load: 375 },
       note: "Block B wk8. Highest accessory volume of the whole plan. Two sessions in a row over the RPE cap = pull the week's loads 5%." },
     { week: 9,  block: "Hypertrophy", tier: "B", rpeCap: 8,
       bench: { sets: 1, reps: 2, pct: 92.5, load: 290 }, benchBO: { sets: 5, reps: 6, pct: 77.5, load: 245 },
-      squat: { sets: 1, reps: 2, pct: 90.0, load: 450 }, squatBO: { sets: 4, reps: 6, pct: 75.0, load: 375 },
+      squat: { sets: 1, reps: 2, pct: 90.0, load: 450 }, squatBO: { sets: 4, reps: 5, pct: 77.5, load: 390 },
       note: "Block B wk9 - peak week of the block. 290x2 bench / 450x2 squat at RPE <= 8 is the checkpoint: if both move clean, the 1RM inputs are conservative and block C starts from a higher base." },
     { week: 10, block: "Deload",      tier: "D", rpeCap: 6, armScale: 0.5,
       bench: { sets: 3, reps: 5, pct: 62.5, load: 195 }, benchBO: null,
@@ -146,19 +154,19 @@ const PROGRAM_PLAN = {
       note: "DELOAD. Same rules as week 5. Do not make up missed block-B work here." },
     { week: 11, block: "Strength",    tier: "C", rpeCap: 8.5,
       bench: { sets: 3, reps: 3, pct: 85.0, load: 270 }, benchBO: { sets: 3, reps: 6, pct: 72.5, load: 230 },
-      squat: { sets: 3, reps: 3, pct: 82.5, load: 415 }, squatBO: { sets: 3, reps: 6, pct: 70.0, load: 350 },
+      squat: { sets: 3, reps: 3, pct: 82.5, load: 415 }, squatBO: { sets: 3, reps: 5, pct: 72.5, load: 365 },
       note: "Block C wk11 - Intensification. The primer becomes the main event: multiple heavy sets, not one. Accessory sets drop ~20% so the bar work gets the recovery. Nothing is deleted." },
     { week: 12, block: "Strength",    tier: "C", rpeCap: 8.5,
       bench: { sets: 4, reps: 3, pct: 87.5, load: 275 }, benchBO: { sets: 3, reps: 6, pct: 75.0, load: 235 },
-      squat: { sets: 3, reps: 3, pct: 85.0, load: 425 }, squatBO: { sets: 3, reps: 5, pct: 72.5, load: 365 },
+      squat: { sets: 3, reps: 3, pct: 85.0, load: 425 }, squatBO: { sets: 3, reps: 5, pct: 75.0, load: 375 },
       note: "Block C wk12. Bench adds a heavy set. Rest 3-4 min between primer sets - these are strength sets, not a circuit." },
     { week: 13, block: "Strength",    tier: "C", rpeCap: 8.5,
       bench: { sets: 4, reps: 2, pct: 90.0, load: 285 }, benchBO: { sets: 3, reps: 5, pct: 77.5, load: 245 },
-      squat: { sets: 4, reps: 2, pct: 87.5, load: 440 }, squatBO: { sets: 3, reps: 5, pct: 75.0, load: 375 },
+      squat: { sets: 4, reps: 2, pct: 87.5, load: 440 }, squatBO: { sets: 3, reps: 4, pct: 77.5, load: 390 },
       note: "Block C wk13. Doubles at 90%/87.5%. This is the week the size you built in A and B starts showing up as bar weight." },
     { week: 14, block: "Strength",    tier: "C", rpeCap: 8.5,
       bench: { sets: 3, reps: 2, pct: 92.5, load: 290 }, benchBO: { sets: 3, reps: 5, pct: 80.0, load: 250 },
-      squat: { sets: 3, reps: 2, pct: 90.0, load: 450 }, squatBO: { sets: 3, reps: 4, pct: 77.5, load: 390 },
+      squat: { sets: 3, reps: 2, pct: 90.0, load: 450 }, squatBO: { sets: 3, reps: 3, pct: 80.0, load: 400 },
       note: "Block C wk14 - heaviest week of the cycle, and it lands Dec 20-26. Holidays plus the heaviest week is a bad pairing: if travel or eating goes sideways, swap weeks 14 and 15 (deload over Christmas, heavy week Dec 27-Jan 2) rather than grinding it. Either way, stop at the cap - a grinder here costs you week 16." },
     { week: 15, block: "Deload",      tier: "D", rpeCap: 6, armScale: 0.5,
       bench: { sets: 3, reps: 5, pct: 65.0, load: 205 }, benchBO: null,
