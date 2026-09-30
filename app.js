@@ -17,6 +17,9 @@
       // the minimalist flow is unchanged unless the person opts in).
       restTimerEnabled: false,
       restTimerSec: 120,
+      // After finishing a workout, offer to hand the session (name + exact
+      // start/end) to the NOOP strap app via its noop://import-health link.
+      noopPromptEnabled: true,
       // Dated bodyweight log [{date, lb}] powering the trend chart and the
       // bodyweight-exercise effort scoring. bodyWeightLb mirrors the latest.
       bodyWeightLog: [],
@@ -1564,6 +1567,52 @@
     navigate("workout-active");
   }
 
+  // ---------- NOOP hand-off ----------
+  // NOOP (the offline WHOOP-strap app) accepts workouts through a deep link:
+  //   noop://import-health?v=1&payload=<base64 text>
+  // one line per workout: W,startUnix,endUnix,sport,durationS,energyKcal,distanceM
+  // Only the session summary travels — NOOP's link has no notes/sets field,
+  // and NOOP scores strain from the strap's heart rate, not from sets/reps.
+  // Sport stays "Strength Training" (NOOP's own lifting token) so sessions
+  // group and get the right icon; the routine name is NOT stuffed in.
+  const NOOP_SPORT = "Strength Training";
+
+  function noopWorkoutLine(w) {
+    const start = Math.floor(new Date(w.date).getTime() / 1000);
+    const dur = Math.max(0, Math.round(w.durationSec || 0));
+    if (!Number.isFinite(start)) return null;
+    return `W,${start},${start + dur},${NOOP_SPORT},${dur},,`;
+  }
+
+  function noopImportUrl(w) {
+    const line = noopWorkoutLine(w);
+    if (!line) return null;
+    // URL-safe base64, no padding — NOOP accepts both alphabets and missing
+    // padding, and this needs no percent-encoding in the query string.
+    const b64 = btoa(line).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    return `noop://import-health?v=1&payload=${b64}`;
+  }
+
+  async function sendWorkoutToNoop(w) {
+    const url = noopImportUrl(w);
+    if (!url) { showToast("Couldn't build the NOOP link"); return; }
+    w.sentToNoopAt = new Date().toISOString();
+    w.noopPrompted = true;
+    await DB.put("workouts", w);
+    window.location.href = url;
+  }
+
+  async function maybePromptNoop(w) {
+    if (!state.settings.noopPromptEnabled || w.noopPrompted) return;
+    w.noopPrompted = true;
+    await DB.put("workouts", w);
+    const ok = await showConfirm(
+      "Add this session to NOOP with its exact start and end time? NOOP will ask you to confirm the import.",
+      { title: "Send to NOOP?", okLabel: "Send to NOOP", cancelLabel: "Not now" }
+    );
+    if (ok) await sendWorkoutToNoop(w);
+  }
+
   async function finishWorkout() {
     const w = state.activeWorkout;
     if (!w) return;
@@ -1612,6 +1661,8 @@
     endRestTimer(false);
     await DB.kvSet("activeWorkout", null);
     navigate("workout-complete", { id: record.id });
+    // Let the completion screen land first, then ask.
+    setTimeout(() => { maybePromptNoop(record); }, 900);
   }
 
   function discardWorkout() {
@@ -2640,6 +2691,14 @@
               </div>
             </div>` : ""}
           <div class="tiny muted" style="margin-top:8px;">Off by default. When on, a countdown starts automatically after you complete a working set.</div>
+          <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+            <span>Ask to send to NOOP</span>
+            <div class="segmented" style="width:120px;">
+              <button data-action="set-noop-prompt" data-value="on" class="${s.noopPromptEnabled ? "active" : ""}">On</button>
+              <button data-action="set-noop-prompt" data-value="off" class="${s.noopPromptEnabled ? "" : "active"}">Off</button>
+            </div>
+          </div>
+          <div class="tiny muted" style="margin-top:8px;">After you finish, offers to add the session to NOOP with its exact start and end time. Only the summary is sent — sets stay here. You can always send from a workout's detail page.</div>
         </div>
       </div>
 
@@ -2914,6 +2973,7 @@
         <div class="small muted" style="text-align:center;">${escapeHtml(effortCaption(hasEffort ? w.effortScore : 0, hasPr, workoutCoverage(w.exercises)))}</div>
         <div class="complete-actions">
           <button class="btn btn-primary" data-action="complete-done">Done</button>
+          <button class="btn" style="margin-top:10px;" data-action="send-noop" data-id="${w.id}">${w.sentToNoopAt ? "Sent to NOOP · Send again" : "Send to NOOP"}</button>
         </div>
       </div>
     `;
@@ -3023,6 +3083,7 @@
           </table>
         </div>
       `; }).join("")}
+      <button class="btn" style="margin-top:8px;" data-action="send-noop" data-id="${w.id}">${w.sentToNoopAt ? "Sent to NOOP · Send again" : "Send to NOOP"}</button>
       <button class="btn btn-danger" style="margin-top:8px;" data-action="delete-workout" data-id="${w.id}">Delete workout</button>
     `;
   }
@@ -3296,6 +3357,15 @@
         state.settings.restTimerEnabled = t.dataset.value === "on";
         saveSettings(); render();
         break;
+      case "set-noop-prompt":
+        state.settings.noopPromptEnabled = t.dataset.value === "on";
+        saveSettings(); render();
+        break;
+      case "send-noop": {
+        const w = state.workouts.find((x) => x.id === t.dataset.id);
+        if (w) sendWorkoutToNoop(w);
+        break;
+      }
       case "set-rest-sec":
         state.settings.restTimerSec = parseInt(t.dataset.sec, 10) || 120;
         saveSettings(); render();
