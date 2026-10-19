@@ -67,6 +67,14 @@
   </button>
 </nav>
 
+<!-- Collapsing large-title header for the four tab screens (Home/History/
+     Analytics/Settings): hidden until the screen's own big <h1> title has
+     scrolled mostly out of view, then fades in as a blurred mini bar —
+     shown/hidden and re-labeled per route in render(). -->
+<div id="mini-topbar" class="mini-topbar" data-enabled="0">
+  <span class="mini-topbar-title" id="mini-topbar-title"></span>
+</div>
+
 <div id="rest-timer-bar" class="rest-timer-bar hidden">
   <button class="rest-timer-adjust" id="rest-minus">−15</button>
   <div class="rest-timer-mid">
@@ -81,6 +89,7 @@
 
 <div id="set-type-overlay" class="confirm-overlay hidden">
   <div class="confirm-card">
+    <div class="confirm-card-handle"></div>
     <div class="confirm-title">Set type</div>
     <div class="menu-list" id="set-type-actions">
       <button class="menu-item" data-type="normal"><span>Normal set</span></button>
@@ -89,12 +98,13 @@
       <button class="menu-item" data-type="failure"><span>To failure</span></button>
       <button class="menu-item menu-item-danger" data-type="remove"><span>Remove set</span></button>
     </div>
-    <button class="confirm-btn confirm-btn-cancel" id="set-type-close" style="margin-top:14px;">Cancel</button>
+    <button class="confirm-btn confirm-btn-cancel" id="set-type-close" data-sheet-dismiss style="margin-top:14px;">Cancel</button>
   </div>
 </div>
 
 <div id="plate-overlay" class="confirm-overlay hidden">
   <div class="confirm-card plate-card">
+    <div class="confirm-card-handle"></div>
     <div class="confirm-title">Plate calculator</div>
     <div class="plate-weight-row">
       <input type="number" step="0.5" id="plate-weight-input" class="plate-weight-input" inputmode="decimal" />
@@ -102,14 +112,14 @@
     </div>
     <div id="plate-visual" class="plate-visual"></div>
     <div id="plate-readout" class="plate-readout"></div>
-    <button class="confirm-btn confirm-btn-cancel" id="plate-close" style="margin-top:14px;">Close</button>
+    <button class="confirm-btn confirm-btn-cancel" id="plate-close" data-sheet-dismiss style="margin-top:14px;">Close</button>
   </div>
 </div>
 
 <div id="exercise-picker" class="picker-overlay hidden">
   <div class="picker-handle"></div>
   <div class="picker-topbar">
-    <button class="back-btn" id="picker-close">Cancel</button>
+    <button class="back-btn" id="picker-close" data-sheet-dismiss>Cancel</button>
     <span class="picker-title" id="picker-title">Add exercise</span>
     <span style="width:46px;"></span>
   </div>
@@ -133,7 +143,7 @@
 <div id="new-exercise-modal" class="picker-overlay hidden">
   <div class="picker-handle"></div>
   <div class="picker-topbar">
-    <button class="back-btn" id="new-exercise-cancel">Cancel</button>
+    <button class="back-btn" id="new-exercise-cancel" data-sheet-dismiss>Cancel</button>
     <span class="picker-title">New exercise</span>
     <span style="width:46px;"></span>
   </div>
@@ -142,10 +152,11 @@
 
 <div id="confirm-overlay" class="confirm-overlay hidden">
   <div class="confirm-card" id="confirm-card">
+    <div class="confirm-card-handle"></div>
     <div class="confirm-title" id="confirm-title"></div>
     <div class="confirm-message" id="confirm-message"></div>
     <div class="confirm-actions">
-      <button class="confirm-btn confirm-btn-cancel" id="confirm-cancel">Cancel</button>
+      <button class="confirm-btn confirm-btn-cancel" id="confirm-cancel" data-sheet-dismiss>Cancel</button>
       <button class="confirm-btn confirm-btn-ok" id="confirm-ok">Confirm</button>
     </div>
   </div>
@@ -153,6 +164,7 @@
 
 <div id="exercise-menu-overlay" class="confirm-overlay hidden">
   <div class="confirm-card" id="exercise-menu-card">
+    <div class="confirm-card-handle"></div>
     <div class="confirm-title">Exercise options</div>
     <div class="menu-list" id="exercise-menu-actions">
       <button class="menu-item" data-action="menu-add-note">
@@ -196,7 +208,7 @@
       <textarea class="menu-note-input" id="menu-note-input" rows="2" placeholder="e.g. RPE 7-8 | 8-10 reps"></textarea>
       <button class="btn btn-primary btn-sm" id="menu-note-save" style="width:100%; margin-top:10px;">Save note</button>
     </div>
-    <button class="confirm-btn confirm-btn-cancel" id="exercise-menu-close" style="margin-top:14px; width:100%;">Close</button>
+    <button class="confirm-btn confirm-btn-cancel" id="exercise-menu-close" data-sheet-dismiss style="margin-top:14px; width:100%;">Close</button>
   </div>
 </div>
 

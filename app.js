@@ -2046,38 +2046,88 @@
   // ---------- Render ----------
   let lastRenderedHash = null;
 
+  // Collapsing large-title header — see #mini-topbar in index.html. Only
+  // the four tab screens use it; everything else (workout-active,
+  // routine-edit, etc.) has its own topbar and leaves this hidden.
+  const TAB_ROUTES = ["home", "history", "analytics", "settings"];
+  const TAB_TITLES = { home: "Home", history: "History", analytics: "Analytics", settings: "Settings" };
+  const miniTopbarEl = document.getElementById("mini-topbar");
+  const miniTopbarTitleEl = document.getElementById("mini-topbar-title");
+  const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
   function render() {
     const { route, params } = parseHash();
+    const navigated = location.hash !== lastRenderedHash;
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.route === route));
-    document.getElementById("tabbar").style.display = ["home", "history", "analytics", "settings"].includes(route) ? "flex" : "none";
+    const isTabRoute = TAB_ROUTES.includes(route);
+    document.getElementById("tabbar").style.display = isTabRoute ? "flex" : "none";
 
-    switch (route) {
-      case "home": renderHome(); break;
-      case "history": renderHistory(params); break;
-      case "analytics": renderAnalytics(); break;
-      case "exercises": navigate("analytics"); break; // legacy route
-      case "settings": renderSettings(); break;
-      case "routine-edit": renderRoutineEdit(params); break;
-      case "workout-active": renderWorkoutActive(); break;
-      case "workout-detail": renderWorkoutDetail(params); break;
-      case "workout-complete": renderWorkoutComplete(params); break;
-      case "exercise-detail": renderExerciseDetail(params); break;
-      case "suggested-day": renderSuggestedDay(params); break;
-      default: renderHome(); break;
+    function paint() {
+      switch (route) {
+        case "home": renderHome(); break;
+        case "history": renderHistory(params); break;
+        case "analytics": renderAnalytics(); break;
+        case "exercises": navigate("analytics"); break; // legacy route
+        case "settings": renderSettings(); break;
+        case "routine-edit": renderRoutineEdit(params); break;
+        case "workout-active": renderWorkoutActive(); break;
+        case "workout-detail": renderWorkoutDetail(params); break;
+        case "workout-complete": renderWorkoutComplete(params); break;
+        case "exercise-detail": renderExerciseDetail(params); break;
+        case "suggested-day": renderSuggestedDay(params); break;
+        default: renderHome(); break;
+      }
+
+      miniTopbarEl.dataset.enabled = isTabRoute ? "1" : "0";
+      miniTopbarTitleEl.textContent = isTabRoute ? TAB_TITLES[route] || "" : "";
+
+      // Only animate + scroll-to-top on an actual navigation (the hash
+      // changed) — not on in-place re-renders triggered by things like
+      // toggling a set checkbox, which call render() without touching the
+      // hash and would otherwise flash/jump distractingly on every tap.
+      if (navigated) {
+        appEl.scrollTop = 0;
+        miniTopbarEl.classList.remove("visible");
+        appEl.classList.remove("app-enter");
+        void appEl.offsetWidth;
+        appEl.classList.add("app-enter");
+      }
+      lastRenderedHash = location.hash;
     }
 
-    // Only animate + scroll-to-top on an actual navigation (the hash
-    // changed) — not on in-place re-renders triggered by things like
-    // toggling a set checkbox, which call render() without touching the
-    // hash and would otherwise flash/jump distractingly on every tap.
-    if (location.hash !== lastRenderedHash) {
-      appEl.scrollTop = 0;
-      appEl.classList.remove("app-enter");
-      void appEl.offsetWidth;
-      appEl.classList.add("app-enter");
+    // A real navigation cross-fades the outgoing/incoming screen (named on
+    // #app alone, so the tabbar/mini-topbar/overlays — unchanged pixels —
+    // never flicker). Feature-detected and skipped under reduced-motion;
+    // an in-place re-render always paints immediately, never transitioned.
+    // lastRenderedHash === null means this is the very first render (app
+    // just loaded) — there's no prior #app content to transition from, so
+    // a view transition here has nothing to do and Chrome logs it as a
+    // skipped/aborted transition. Skip attempting one on that first paint.
+    if (navigated && lastRenderedHash !== null && !prefersReducedMotion && document.startViewTransition) {
+      const vt = document.startViewTransition(paint);
+      // A transition can legitimately be skipped (e.g. the page just
+      // loaded, or another transition was already running) — that's a
+      // normal fallback to an instant paint, not an error worth surfacing.
+      vt.updateCallbackDone.catch(() => {});
+      vt.ready.catch(() => {});
+      vt.finished.catch(() => {});
+    } else {
+      paint();
     }
-    lastRenderedHash = location.hash;
   }
+
+  // Collapsing-header reveal: fade the mini bar in once the big title has
+  // scrolled mostly out of view. Cheap rAF-guarded class toggle, not a
+  // continuous scroll-position tween — the mini bar only ever needs to be
+  // fully shown or fully hidden.
+  let miniTopbarRaf = null;
+  appEl.addEventListener("scroll", () => {
+    if (miniTopbarEl.dataset.enabled !== "1" || miniTopbarRaf) return;
+    miniTopbarRaf = requestAnimationFrame(() => {
+      miniTopbarRaf = null;
+      miniTopbarEl.classList.toggle("visible", appEl.scrollTop > 36);
+    });
+  }, { passive: true });
 
   // Which metric the home-page progress chart shows. In-memory only — it
   // resets to effort on each launch, which is the more meaningful default.
@@ -3544,6 +3594,81 @@
       </div>
     `;
   }
+
+  // ---------- Sheet drag-to-dismiss ----------
+  // Every bottom sheet (the confirm/menu/set-type/plate "card" sheets, plus
+  // the exercise picker and new-exercise modal) can be dragged down from its
+  // handle to dismiss, same as a native action sheet. A drag only starts
+  // when the pointerdown target is inside `grabZoneSelector` (the visible
+  // grabber pill, or the picker's topbar) — never from a tap on a button/
+  // input/list row elsewhere in the sheet. `sheetSelector` is the element
+  // that actually slides: a nested .confirm-card for the confirm-family
+  // overlays, or null for the picker overlays (which slide as a whole,
+  // there's no separate inner card). Dismissal re-triggers the overlay's
+  // own [data-sheet-dismiss] control, so each overlay's existing close
+  // logic (state cleanup, promise resolution, etc.) still runs as-is; this
+  // utility only decides *when* to fire that click.
+  function initSheetDrag(overlaySelector, sheetSelector, grabZoneSelector) {
+    document.body.addEventListener("pointerdown", (e) => {
+      const overlay = e.target.closest(overlaySelector);
+      if (!overlay || !overlay.classList.contains("open")) return;
+      if (!e.target.closest(grabZoneSelector)) return;
+      const sheet = sheetSelector ? overlay.querySelector(sheetSelector) : overlay;
+      const dismissBtn = overlay.querySelector("[data-sheet-dismiss]");
+      if (!sheet || !dismissBtn) return;
+
+      const pointerId = e.pointerId;
+      const startY = e.clientY;
+      let lastY = startY;
+      let lastT = performance.now();
+      let velocity = 0;
+      // Don't claim the pointer (or touch anything visually) until real
+      // movement is seen — a plain tap on the handle/topbar, including the
+      // Cancel button itself, must still fire its native click undisturbed.
+      let dragging = false;
+
+      function onMove(ev) {
+        if (ev.pointerId !== pointerId) return;
+        const dy = ev.clientY - startY;
+        if (!dragging) {
+          if (Math.abs(dy) < 6) return;
+          dragging = true;
+          sheet.setPointerCapture(pointerId);
+          overlay.classList.add("dragging");
+        }
+        const now = performance.now();
+        const dt = now - lastT;
+        if (dt > 0) velocity = (ev.clientY - lastY) / dt;
+        lastY = ev.clientY;
+        lastT = now;
+        sheet.style.transform = `translateY(${Math.max(0, dy)}px)`;
+      }
+      function onUp(ev) {
+        if (ev.pointerId !== pointerId) return;
+        cleanup();
+        if (!dragging) return;
+        const dy = Math.max(0, ev.clientY - startY);
+        sheet.style.transform = "";
+        if (dy > 90 || velocity > 0.6) dismissBtn.click();
+      }
+      function onCancel(ev) {
+        if (ev.pointerId !== pointerId) return;
+        cleanup();
+        sheet.style.transform = "";
+      }
+      function cleanup() {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", onUp);
+        document.removeEventListener("pointercancel", onCancel);
+        overlay.classList.remove("dragging");
+      }
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp);
+      document.addEventListener("pointercancel", onCancel);
+    }, { passive: true });
+  }
+  initSheetDrag(".confirm-overlay", ".confirm-card", ".confirm-card-handle");
+  initSheetDrag(".picker-overlay", null, ".picker-handle, .picker-topbar");
 
   // ---------- Event delegation ----------
   appEl.addEventListener("click", onAppClick);
