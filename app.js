@@ -17,9 +17,6 @@
       // the minimalist flow is unchanged unless the person opts in).
       restTimerEnabled: false,
       restTimerSec: 120,
-      // After finishing a workout, offer to hand the session (name + exact
-      // start/end) to the NOOP strap app via its noop://import-health link.
-      noopPromptEnabled: true,
       // Dated bodyweight log [{date, lb}] powering the trend chart and the
       // bodyweight-exercise effort scoring. bodyWeightLb mirrors the latest.
       bodyWeightLog: [],
@@ -1243,9 +1240,9 @@
   // own historical best, so it self-calibrates as you get stronger instead
   // of chasing a fixed, arbitrary ceiling.
 
-  // Difficulty is a heuristic (equipment x muscle-mass x movement pattern),
-  // not a manual lookup table, so it applies automatically to custom
-  // exercises too. It's intentionally approximate — the goal is "mostly
+  // Fallback difficulty heuristic (equipment x muscle-mass x movement
+  // pattern) — used only for custom exercises with no hand-scored profile
+  // in exercise-standards.js (see difficultyInfo below). It's intentionally approximate — the goal is "mostly
   // right on average," not a perfect biomechanics model.
   const MUSCLE_DIFFICULTY = {
     "Full Body": 1.25, Legs: 1.15, Back: 1.1, Chest: 1.05, Glutes: 1.05,
@@ -1279,12 +1276,583 @@
     return 1.0;
   }
 
-  function exerciseDifficulty(ex) {
+  function heuristicDifficulty(ex) {
     if (!ex) return 1.0;
     const muscle = MUSCLE_DIFFICULTY[ex.muscle] ?? 1.0;
     const equipment = EQUIPMENT_DIFFICULTY[ex.equipment] ?? 1.0;
     const movement = movementFactor(ex.name);
     return Math.max(0.65, Math.min(1.65, muscle * equipment * movement));
+  }
+
+  // ===== Exercise difficulty tiers (effort v6) =====
+  // Every library exercise has a hand-scored profile in exercise-standards.js
+  // (muscle mass m, spinal load a, skill/stability s → points = 2m + a + s,
+  // 2–10). That replaces the name-keyword guess above for library lifts; a
+  // custom exercise with no profile still uses the heuristic, so nothing
+  // the user adds goes unscored.
+  const DIFFICULTY_TIERS = [
+    { tier: "S", min: 9 }, { tier: "A", min: 7 }, { tier: "B", min: 5 }, { tier: "C", min: 3 }, { tier: "D", min: 0 },
+  ];
+  function difficultyInfo(ex) {
+    if (!ex) return null;
+    const d = (typeof EXERCISE_DIFFICULTY !== "undefined" && EXERCISE_DIFFICULTY[ex.id]) || null;
+    let points, factor;
+    if (d) {
+      points = 2 * d.m + d.a + d.s;
+      factor = 0.65 + (points - 2) * 0.125;
+    } else {
+      factor = heuristicDifficulty(ex);
+      points = Math.max(2, Math.min(10, Math.round(2 + (factor - 0.65) / 0.125)));
+    }
+    const tier = DIFFICULTY_TIERS.find((t) => points >= t.min).tier;
+    return { points, tier, factor, parts: d, estimated: !d };
+  }
+  function exerciseDifficulty(ex) {
+    if (!ex) return 1.0;
+    return difficultyInfo(ex).factor;
+  }
+
+  // ===== Strength levels (Strength Level standards, male) =====
+  // A set's weight × reps becomes an Epley e1RM (reps capped at 12, past
+  // which Epley over-reads), then is placed against strengthlevel.com's
+  // community standards for that lift at the lifter's bodyweight on the
+  // day. Bodyweight lifts with rep standards compare reps; added load on
+  // a bodyweight lift converts to equivalent bodyweight reps (Epley).
+  const STRENGTH_LEVELS = ["Beginner", "Novice", "Intermediate", "Advanced", "Elite"];
+  const STRENGTH_LEVEL_PCTL = [5, 20, 50, 80, 95];
+  const RANK_MAX_REPS = 12;
+
+  function strengthStandardFor(ex) {
+    if (!ex || typeof EXERCISE_STANDARD_KEY === "undefined") return null;
+    const key = EXERCISE_STANDARD_KEY[ex.id];
+    return key && STRENGTH_STANDARDS[key] ? STRENGTH_STANDARDS[key] : null;
+  }
+
+  // Bodyweight on a given date: latest log entry on/before it, else the
+  // earliest entry, else the current setting. null = no bodyweight known.
+  function bodyWeightOn(dateIso) {
+    const log = (state.settings.bodyWeightLog || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+    if (!log.length) return currentBodyWeightLb();
+    const t = dateIso ? new Date(dateIso).getTime() : Date.now();
+    let bw = log[0].lb;
+    for (const e of log) { if (new Date(e.date).getTime() <= t) bw = e.lb; else break; }
+    return bw;
+  }
+
+  // Five thresholds at bodyweight `bw`, linearly interpolated between the
+  // table's 10-lb rows (clamped to the table's 110–310 lb range).
+  function standardsAt(std, bw) {
+    const rows = std.rows;
+    if (bw <= rows[0][0]) return rows[0].slice(1);
+    const last = rows[rows.length - 1];
+    if (bw >= last[0]) return last.slice(1);
+    for (let i = 0; i < rows.length - 1; i++) {
+      const a = rows[i], b = rows[i + 1];
+      if (bw >= a[0] && bw <= b[0]) {
+        const f = (bw - a[0]) / (b[0] - a[0]);
+        return a.slice(1).map((v, k) => v + (b[k + 1] - v) * f);
+      }
+    }
+    return last.slice(1);
+  }
+
+  // The number a set is ranked on: e1RM (lb) or reps, per the standard.
+  function setStrengthValue(set, ex, std, bw) {
+    if (!set || !set.completed || set.isWarmup || !(set.reps > 0)) return null;
+    if (std.unit === "reps") {
+      const added = ex.equipment === "Bodyweight" ? (set.weight || 0) : 0;
+      if (added > 0 && bw > 0) return 30 * ((bw + added) * (1 + set.reps / 30) / bw - 1);
+      return set.reps;
+    }
+    if (!(set.weight > 0) || set.reps > RANK_MAX_REPS) return null;
+    return estOneRm(set.weight, set.reps);
+  }
+
+  // value → { level, levelIndex (0–4), pctl, thresholds, next }.
+  // Percentile is piecewise-linear between the published level cut-offs
+  // (5/20/50/80/95); above Elite it eases toward 99.9 by 1.25 × Elite.
+  function strengthRankFromValue(value, th, unit) {
+    const P = STRENGTH_LEVEL_PCTL;
+    let pctl;
+    const beg = th[0] > 0 ? th[0] : 1;
+    if (value < beg) pctl = Math.max(0, 5 * value / beg);
+    else if (value >= th[4]) pctl = Math.min(99.9, 95 + 4.9 * (value - th[4]) / (th[4] * 0.25));
+    else {
+      pctl = 95;
+      for (let i = 0; i < 4; i++) {
+        if (value < th[i + 1]) { pctl = P[i] + (P[i + 1] - P[i]) * (value - th[i]) / (th[i + 1] - th[i]); break; }
+      }
+    }
+    let levelIndex = 0;
+    for (let i = 0; i < 5; i++) if (value >= th[i] && th[i] > 0) levelIndex = i;
+    const belowBeginner = th[0] > 0 && value < th[0];
+    const nextIdx = belowBeginner ? 0 : levelIndex + 1;
+    const next = nextIdx <= 4 ? { level: STRENGTH_LEVELS[nextIdx], target: th[nextIdx], gap: th[nextIdx] - value } : null;
+    return { level: STRENGTH_LEVELS[levelIndex], levelIndex, pctl, thresholds: th, value, unit, next, belowBeginner };
+  }
+
+  // Best rank across a list of sets (one workout's exercise, or history).
+  function rankSets(ex, sets, dateIso) {
+    const std = strengthStandardFor(ex);
+    if (!std) return null;
+    const bw = bodyWeightOn(dateIso);
+    if (!(bw > 0)) return null;
+    let best = null, bestSet = null;
+    for (const s of sets) {
+      const v = setStrengthValue(s, ex, std, bw);
+      if (v != null && (best == null || v > best)) { best = v; bestSet = s; }
+    }
+    if (best == null) return null;
+    const r = strengthRankFromValue(best, standardsAt(std, bw), std.unit);
+    r.set = bestSet; r.bodyWeight = bw; r.slug = std.slug;
+    return r;
+  }
+
+  // All-time best rank for an exercise (each set judged at that day's bodyweight).
+  function bestStrengthRank(exerciseId) {
+    const ex = exerciseById(exerciseId);
+    let best = null;
+    for (const w of state.workouts) {
+      const e = w.exercises.find((x) => x.exerciseId === exerciseId);
+      if (!e) continue;
+      const r = rankSets(ex, e.sets, w.date);
+      if (r && (!best || r.pctl > best.pctl)) { best = r; best.date = w.date; }
+    }
+    return best;
+  }
+
+  function rankValueLabel(r, v) {
+    return r.unit === "reps" ? `${Math.round(v)} reps` : `${Math.round(weightToDisplay(v))} ${unitLabel()}`;
+  }
+  function levelBadgeHtml(r) {
+    if (!r) return "";
+    return `<span class="lvl-badge lvl-${r.levelIndex}${r.belowBeginner ? " lvl-under" : ""}">${r.level}</span>`;
+  }
+  function tierChipHtml(ex) {
+    const d = difficultyInfo(ex);
+    return d ? `<span class="tier-chip tier-${d.tier}" title="Difficulty ${d.points}/10">${d.tier}</span>` : "";
+  }
+  // ===== Training coach (muscle-building + strength) =====
+  // Program-independent rules built on the current dose-response research:
+  //  • Volume — weekly FRACTIONAL sets per muscle (primary mover 1, helper
+  //    0.5), the counting method that best predicts growth. Growth rises
+  //    with volume with diminishing returns; ~10–20 weekly sets per muscle
+  //    is the productive range for trained lifters. (Pelland et al. 2024)
+  //  • Per session — returns flatten past ~11 fractional sets for one
+  //    muscle in one session; split it across days. (Remmert et al. 2025)
+  //  • Effort — growth is greater the closer sets go to failure, strength
+  //    isn't. So sets of 6+ reps should end ~0–3 RIR; heavy low-rep sets
+  //    don't need to. (Robinson et al. 2024)
+  //  • Exercise selection — regional growth needs more than one movement:
+  //    overhead elbow extension grows the triceps long head far more than
+  //    pushdowns (Maeo 2023); squats barely grow the hamstrings or rectus
+  //    femoris, so knee-flexion and knee-extension work are needed (Kubo
+  //    2019; Maeo 2021, seated curl > lying); training at long muscle
+  //    lengths grows more (Wolf et al. 2025).
+  //  • Strength — needs regular heavy exposure (>~80% 1RM; Lopez et al.
+  //    2021) and benefits from frequency, unlike hypertrophy (Pelland 2024).
+  //  • Rest — >60–90 s between sets slightly favours growth (Singer 2024).
+  // Program rules always win: the hinge/back rule, the squat-volume cap and
+  // anti-flexion-only core are respected, and every suggestion is advice —
+  // nothing is auto-applied.
+  const MUSCLE_LABELS = {
+    chest: "Chest", frontDelts: "Front delts", sideDelts: "Side delts", rearDelts: "Rear delts",
+    lats: "Lats", upperBack: "Upper back", biceps: "Biceps", triceps: "Triceps", forearms: "Forearms",
+    quads: "Quads", hamstrings: "Hamstrings", glutes: "Glutes", adductors: "Adductors", calves: "Calves",
+    abs: "Abs", lowerBack: "Lower back",
+  };
+  // Weekly fractional-set targets. Front delts get heavy indirect work from
+  // every press, so their floor is low. Forearms/adductors/lower back are
+  // tracked but never nagged.
+  const MUSCLE_TARGETS = {
+    chest: [10, 20], lats: [10, 20], upperBack: [10, 20], sideDelts: [10, 20], rearDelts: [6, 16],
+    frontDelts: [4, 16], biceps: [8, 20], triceps: [8, 20], quads: [10, 20], hamstrings: [8, 20],
+    glutes: [8, 20], calves: [8, 16], abs: [6, 16],
+  };
+  const COACH_SESSION_CAP = 11;
+  const COACH_HEAVY_PCT = 0.8;
+  const COACH_SUPPRESS_BLOCKS = ["Deload", "Re-express"];
+  const COARSE_TO_FINE = {
+    Chest: ["chest"], Back: ["lats", "upperBack"], Shoulders: ["sideDelts"], Biceps: ["biceps"], Triceps: ["triceps"],
+    Legs: ["quads"], Glutes: ["glutes"], Calves: ["calves"], Core: ["abs"], Forearms: ["forearms"], "Full Body": ["quads", "glutes"],
+  };
+
+  function exerciseMuscles(ex) {
+    if (!ex) return { p: [], s: [], t: [], L: false };
+    const m = typeof EXERCISE_MUSCLES !== "undefined" ? EXERCISE_MUSCLES[ex.id] : null;
+    if (m) return { p: m.p, s: m.s, t: m.t, L: !!m.L };
+    return { p: COARSE_TO_FINE[ex.muscle] || [], s: [], t: [], L: false };
+  }
+
+  function programRules() {
+    return typeof PROGRAM_PLAN !== "undefined" && PROGRAM_PLAN.rules ? PROGRAM_PLAN.rules : {};
+  }
+  function currentBlock() {
+    try { const ps = programState(); return ps && !ps.post ? ps.row.block : null; } catch (e) { return null; }
+  }
+
+  function workingSets(e) { return e.sets.filter((s) => s.completed && !s.isWarmup && (s.reps || 0) > 0); }
+
+  // { muscle: fractionalSets } for a list of workouts, plus the max any
+  // single session put on each muscle.
+  function fractionalVolume(workouts) {
+    const total = {}, sessionMax = {}, sessionMaxWorkout = {};
+    for (const w of workouts) {
+      const sess = {};
+      for (const e of w.exercises) {
+        const ex = exerciseById(e.exerciseId);
+        const n = workingSets(e).length;
+        if (!ex || !n) continue;
+        const mm = exerciseMuscles(ex);
+        mm.p.forEach((m) => { sess[m] = (sess[m] || 0) + n; });
+        mm.s.forEach((m) => { if (!mm.p.includes(m)) sess[m] = (sess[m] || 0) + n * 0.5; });
+      }
+      for (const [m, v] of Object.entries(sess)) {
+        total[m] = (total[m] || 0) + v;
+        if (v > (sessionMax[m] || 0)) { sessionMax[m] = v; sessionMaxWorkout[m] = w; }
+      }
+    }
+    return { total, sessionMax, sessionMaxWorkout };
+  }
+
+  // Estimated reps in reserve for a set: logged RPE / failure flag first,
+  // else the Epley estimate against your best e1RM. null when unknowable.
+  function estimateSetRir(set, ex, bestE1rm) {
+    if (set.type === "failure") return 0;
+    if (typeof set.rpe === "number" && set.rpe > 0) return Math.max(0, 10 - set.rpe);
+    const load = effectiveLoad(set, ex);
+    if (!(load > 0) || !(bestE1rm > 0)) return null;
+    return Math.max(0, 30 * (bestE1rm / load - 1) - set.reps);
+  }
+
+  function workoutsWithin(days, now = Date.now()) {
+    const cut = now - days * 86400000;
+    return state.workouts.filter((w) => new Date(w.date).getTime() >= cut);
+  }
+
+  // Per-muscle exercise suggestions, filtered by the program's constraints.
+  function coachSuggestFor(muscle, need) {
+    const r = programRules();
+    const S = {
+      chest: { press: "a dumbbell or machine press", fly: "a deep dumbbell fly or cable fly", any: "dumbbell presses and cable flyes" },
+      lats: { vertical: "lat pulldowns or pull-ups", any: "pulldowns or pull-ups" },
+      upperBack: { horizontal: r.hinge ? "chest-supported or machine rows" : "rows (chest-supported keeps it easy on the back)", any: r.hinge ? "chest-supported rows" : "rows" },
+      sideDelts: { lateral: "lateral raises (cable or machine, in the scapular plane)", any: "lateral raises" },
+      rearDelts: { rear: "reverse pec deck or face pulls", any: "reverse pec deck or face pulls" },
+      frontDelts: { any: "overhead or incline pressing" },
+      biceps: { stretch: "incline dumbbell curls or preacher curls", any: "curls (incline or preacher for the stretch)" },
+      triceps: { overhead: "overhead cable or dumbbell extensions", extension: "pushdowns or skull crushers", any: "overhead extensions and pushdowns" },
+      quads: { "knee-ext": "leg extensions", any: r.squatVolume ? "leg press or hack squat (squat volume is capped by your program)" : "leg press, hack squat or leg extensions" },
+      hamstrings: { "knee-flex": "seated leg curls (they out-grow lying curls)", hinge: "RDLs", any: r.hinge ? "seated leg curls" : "seated leg curls and RDLs" },
+      glutes: { "hip-ext": "hip thrusts", abduction: "hip abduction", any: "hip thrusts or lunges" },
+      calves: { straight: "standing calf raises with a full stretch", bent: "seated calf raises", any: "standing and seated calf raises" },
+      abs: { anti: "Pallof presses, dead bugs or planks", flexion: "cable crunches", any: r.hinge ? "Pallof presses or dead bugs (anti-rotation only for now)" : "cable crunches and Pallof presses" },
+    };
+    const m = S[muscle] || {};
+    return m[need] || m.any || "more direct work";
+  }
+
+  function trainingInsights(opts = {}) {
+    const now = opts.now || Date.now();
+    const out = [];
+    const recent28 = workoutsWithin(28, now);
+    if (recent28.length < 3) {
+      if (state.workouts.length) out.push({ kind: "info", title: "Coach is warming up", body: "Log a few more sessions (3+ in four weeks) and the coach starts checking your volume, effort and exercise mix per muscle.", cite: null, muscles: [] });
+      return out;
+    }
+    const rules = programRules();
+    const block = currentBlock();
+    const easyWeek = COACH_SUPPRESS_BLOCKS.includes(block);
+    const earliest = Math.min(...recent28.map((w) => new Date(w.date).getTime()));
+    const weeks = Math.max(1, Math.min(4, (now - earliest) / (7 * 86400000) + 1 / 7));
+    const vol = fractionalVolume(recent28);
+    const perWeek = (m) => (vol.total[m] || 0) / weeks;
+    const fmt = (v) => (v < 10 ? v.toFixed(1).replace(/\.0$/, "") : String(Math.round(v)));
+
+    // Movement types and long-length work seen per muscle (28 days).
+    const types = new Set(), lengthened = new Set();
+    for (const w of recent28) for (const e of w.exercises) {
+      const ex = exerciseById(e.exerciseId);
+      if (!ex || !workingSets(e).length) continue;
+      const mm = exerciseMuscles(ex);
+      mm.t.forEach((t) => types.add(t));
+      if (mm.L) mm.p.forEach((m) => lengthened.add(m));
+    }
+
+    // 1) Volume per muscle.
+    if (!easyWeek) {
+      for (const [m, [lo, hi]] of Object.entries(MUSCLE_TARGETS)) {
+        if (m === "abs" && rules.hinge) continue;
+        const v = perWeek(m);
+        if (v < lo * 0.5) {
+          out.push({ kind: "warn", pri: 1, title: `${MUSCLE_LABELS[m]} neglected · ${fmt(v)} sets/wk`, body: `Well under the ${lo}–${hi} weekly sets that drive growth. Add ${Math.ceil(lo - v)} sets a week of ${coachSuggestFor(m, "any")}, split across two sessions.`, cite: "Pelland et al. 2024", muscles: [m] });
+        } else if (v < lo) {
+          out.push({ kind: "suggest", pri: 2, title: `${MUSCLE_LABELS[m]} below the growth range · ${fmt(v)} sets/wk`, body: `About ${Math.ceil(lo - v)} more weekly sets would put it in the ${lo}–${hi} range. Easiest add: ${coachSuggestFor(m, "any")}.`, cite: "Pelland et al. 2024", muscles: [m] });
+        } else if (v > hi + 5) {
+          out.push({ kind: "info", pri: 5, title: `${MUSCLE_LABELS[m]} volume is very high · ${fmt(v)} sets/wk`, body: "Gains keep coming with more volume but with diminishing returns. Fine while recovery, joints and performance hold; it's the first place to trim if they don't.", cite: "Pelland et al. 2024", muscles: [m] });
+        }
+      }
+    }
+
+    // 2) Per-session cap (last 14 days).
+    const vol14 = fractionalVolume(workoutsWithin(14, now));
+    for (const [m, v] of Object.entries(vol14.sessionMax)) {
+      if (!MUSCLE_TARGETS[m] || v <= COACH_SESSION_CAP + 0.5) continue;
+      const w = vol14.sessionMaxWorkout[m];
+      out.push({ kind: "suggest", pri: 3, title: `${MUSCLE_LABELS[m]}: ${fmt(v)} sets in one session`, body: `${w.name} on ${fmtDate(w.date)} put ${fmt(v)} sets on ${MUSCLE_LABELS[m].toLowerCase()}. Past ~${COACH_SESSION_CAP} per session the extra sets add little. Move a few to another day instead of cutting them.`, cite: "Remmert et al. 2025", muscles: [m] });
+    }
+
+    // 3) Effort — hypertrophy-range sets (6+ reps) left too far from failure.
+    if (!easyWeek) {
+      const rirBy = {};
+      for (const w of workoutsWithin(14, now)) for (const e of w.exercises) {
+        const ex = exerciseById(e.exerciseId);
+        if (!ex) continue;
+        const best = bestE1rmAllTime(ex.id);
+        for (const s of workingSets(e)) {
+          if (s.reps < 6) continue;
+          const rir = estimateSetRir(s, ex, best);
+          if (rir == null) continue;
+          for (const m of exerciseMuscles(ex).p) (rirBy[m] = rirBy[m] || []).push(Math.min(rir, 8));
+        }
+      }
+      const soft = Object.entries(rirBy)
+        .filter(([m, a]) => MUSCLE_TARGETS[m] && a.length >= 4 && a.reduce((x, y) => x + y, 0) / a.length >= 3.5)
+        .map(([m, a]) => ({ m, avg: a.reduce((x, y) => x + y, 0) / a.length }))
+        .sort((a, b) => b.avg - a.avg);
+      if (soft.length) {
+        const list = soft.slice(0, 4).map((x) => `${MUSCLE_LABELS[x.m].toLowerCase()} (~${x.avg.toFixed(1)} RIR)`).join(", ");
+        out.push({ kind: "warn", pri: 1, title: "Push harder on your growth sets", body: `Sets of 6+ reps for ${list} are ending too far from failure. Growth rises the closer you get, so finish those sets at 0–3 reps in reserve (RPE 7–10). Your heavy low-rep strength sets don't need this, and your program's RPE caps on the comp lifts still apply.`, cite: "Robinson et al. 2024", muscles: soft.map((x) => x.m) });
+      }
+    }
+
+    // 4) Exercise-type coverage per muscle (28 days).
+    const trained = (m) => perWeek(m) >= 2;
+    const COVER = [
+      { m: "triceps", t: "triceps:overhead", need: "overhead", kind: "suggest", why: "Overhead extensions stretch the long head (the biggest part of the triceps) and grew it far more than pushdowns in a head-to-head study.", cite: "Maeo et al. 2023" },
+      { m: "quads", t: "quads:knee-ext", need: "knee-ext", kind: "suggest", why: "Squats and presses barely grow the rectus femoris; it needs knee-extension work.", cite: "Zabaleta-Korta 2021; Kubo 2019" },
+      { m: "hamstrings", t: "hams:knee-flex", need: "knee-flex", kind: "warn", why: "Squats don't grow the hamstrings, so you need direct knee flexion. Seated curls train them at long lengths and grew more than lying curls.", cite: "Kubo 2019; Maeo et al. 2021", always: true },
+      { m: "lats", t: "back:vertical", need: "vertical", kind: "suggest", why: "Vertical pulls bias the lats; rows alone lean on the mid-back.", cite: "Kassiano 2022 (variation)" },
+      { m: "upperBack", t: "back:horizontal", need: "horizontal", kind: "suggest", why: "Rows hit the mid-back and rear delts in a way pulldowns don't.", cite: "Kassiano 2022 (variation)" },
+      { m: "sideDelts", t: "delts:lateral", need: "lateral", kind: "warn", why: "Pressing barely touches the side delts. They grow from raises.", cite: "Pelland et al. 2024 (direct vs indirect)", always: true },
+      { m: "rearDelts", t: "delts:rear", need: "rear", kind: "info", why: "Rows help, but direct rear-delt work fills out the back of the shoulder.", cite: null },
+      { m: "chest", t: "chest:fly", need: "fly", kind: "info", why: "A stretch-loaded fly adds a long-length stimulus that presses alone don't.", cite: "Wolf et al. 2025", alt: "chest" },
+      { m: "biceps", t: "biceps:stretch", need: "stretch", kind: "info", why: "Curls that load the biceps stretched (incline, preacher) add growth at long lengths.", cite: "Wolf et al. 2025; Pedrosa 2023" },
+      { m: "calves", t: "calves:bent", need: "bent", kind: "info", why: "Bent-knee raises target the soleus, which standing raises only partly reach.", cite: null },
+      { m: "calves", t: "calves:straight", need: "straight", kind: "info", why: "Straight-knee raises with a deep stretch train the gastrocnemius at long lengths.", cite: "Wolf et al. 2025" },
+      { m: "glutes", t: "glutes:hip-ext", need: "hip-ext", kind: "info", why: "Hip extension at load is the main glute grower.", cite: null },
+    ];
+    if (!rules.hinge) COVER.push({ m: "hamstrings", t: "hams:hinge", need: "hinge", kind: "info", why: "A hip hinge trains the hamstrings at long lengths from the hip end.", cite: "Wolf et al. 2025" });
+    const coveredFlag = new Set();
+    const neglected = new Set(out.filter((i) => / neglected /.test(i.title)).flatMap((i) => i.muscles));
+    for (const c of COVER) {
+      if (types.has(c.t)) continue;
+      if (neglected.has(c.m)) {
+        // Fold the missing-movement advice into the volume warning instead of a second card.
+        const v = out.find((i) => / neglected /.test(i.title) && i.muscles.includes(c.m));
+        if (v && !v.folded) { v.body = v.body.replace(coachSuggestFor(c.m, "any"), coachSuggestFor(c.m, c.need)) + " " + c.why; v.cite = [v.cite, c.cite].filter(Boolean).join("; "); v.folded = true; }
+        coveredFlag.add(c.m);
+        continue;
+      }
+      if (c.alt && lengthened.has(c.alt)) continue;
+      if (!c.always && !trained(c.m)) continue;
+      coveredFlag.add(c.m);
+      out.push({ kind: c.kind, pri: c.kind === "warn" ? 2 : c.kind === "suggest" ? 3 : 6, title: `${MUSCLE_LABELS[c.m]}: no ${coachSuggestFor(c.m, c.need).split(" (")[0]} in 4 weeks`, body: `${c.why} Add 2–4 weekly sets of ${coachSuggestFor(c.m, c.need)}.`, cite: c.cite, muscles: [c.m] });
+    }
+    // Long-length work (quads, chest, triceps) when not already flagged above.
+    for (const m of ["quads", "chest", "triceps", "calves"]) {
+      if (coveredFlag.has(m) || !trained(m) || lengthened.has(m)) continue;
+      out.push({ kind: "info", pri: 6, title: `${MUSCLE_LABELS[m]}: nothing at long muscle lengths`, body: `Training a muscle in its stretched position grows it more. Make one ${MUSCLE_LABELS[m].toLowerCase()} exercise a deep-stretch variation, or add lengthened partials to the last set.`, cite: "Wolf et al. 2025", muscles: [m] });
+    }
+
+    // 5) Strength — heavy exposure + frequency on your strength lifts.
+    const recent42 = workoutsWithin(42, now);
+    const liftStats = {};
+    for (const w of recent42) for (const e of w.exercises) {
+      const ex = exerciseById(e.exerciseId);
+      if (!ex) continue;
+      const ws = workingSets(e);
+      if (!ws.length) continue;
+      const st = (liftStats[ex.id] = liftStats[ex.id] || { ex, low: 0, sessions28: 0, lastHeavy: 0 });
+      st.low += ws.filter((s) => s.reps <= 6).length;
+      if (new Date(w.date).getTime() >= now - 28 * 86400000) st.sessions28++;
+    }
+    for (const st of Object.values(liftStats)) {
+      const d = difficultyInfo(st.ex);
+      if (st.low < 3 || !d || d.points < 5) continue;
+      const best = bestE1rmAllTime(st.ex.id);
+      if (!(best > 0)) continue;
+      for (const w of recent42) {
+        const e = w.exercises.find((x) => x.exerciseId === st.ex.id);
+        if (!e) continue;
+        if (workingSets(e).some((s) => effectiveLoad(s, st.ex) >= COACH_HEAVY_PCT * best)) st.lastHeavy = Math.max(st.lastHeavy, new Date(w.date).getTime());
+      }
+      const daysSince = st.lastHeavy ? (now - st.lastHeavy) / 86400000 : 99;
+      if (!easyWeek && daysSince > 14) {
+        out.push({ kind: "warn", pri: 2, title: `${st.ex.name}: no heavy work in ${daysSince >= 42 ? "6+ weeks" : Math.floor(daysSince) + " days"}`, body: `Strength comes from regular heavy exposure. Get at least a few sets at or above ${Math.round(COACH_HEAVY_PCT * best)} lb (80% of your ${Math.round(best)} e1RM) each week, at RPE 7–9.`, cite: "Lopez et al. 2021", muscles: exerciseMuscles(st.ex).p });
+      }
+      const freq = st.sessions28 / Math.min(4, weeks);
+      if (st.sessions28 >= 2 && freq < 1.5 && d.points >= 7) {
+        out.push({ kind: "info", pri: 5, title: `${st.ex.name} ~${freq.toFixed(1)}×/week`, body: "Unlike muscle growth, strength gains rise with how often you practice a lift. Splitting the same sets across two sessions a week is a cheap win.", cite: "Pelland et al. 2024", muscles: exerciseMuscles(st.ex).p });
+      }
+    }
+
+    // 6) Stalls — e1RM flat across the last 3 sessions vs. before (8 weeks).
+    if (!easyWeek) {
+      const programLifts = currentBlock() ? ["squat", "barbell-bench-press"] : [];
+      const series = {};
+      for (const w of workoutsWithin(56, now).slice().reverse()) for (const e of w.exercises) {
+        if (programLifts.includes(e.exerciseId)) continue;
+        let best = 0;
+        for (const s of workingSets(e)) if (s.reps <= 12 && s.weight > 0) best = Math.max(best, estOneRm(s.weight, s.reps));
+        if (best > 0) (series[e.exerciseId] = series[e.exerciseId] || []).push({ t: new Date(w.date).getTime(), v: best });
+      }
+      const stalls = [];
+      for (const [id, arr] of Object.entries(series)) {
+        if (arr.length < 5 || arr[arr.length - 1].t - arr[0].t < 21 * 86400000) continue;
+        const prior = Math.max(...arr.slice(0, -3).map((x) => x.v));
+        const last3 = Math.max(...arr.slice(-3).map((x) => x.v));
+        if (last3 <= prior * 1.005) stalls.push(exerciseById(id));
+      }
+      if (stalls.length) {
+        out.push({ kind: "suggest", pri: 3, title: `Stalled: ${stalls.slice(0, 3).map((x) => x.name).join(", ")}${stalls.length > 3 ? ` +${stalls.length - 3}` : ""}`, body: "No e1RM progress in your last 3 sessions. In order: make sure the last set really ends 0–2 RIR, add a set, then shift the rep range (e.g. 6–8 to 10–12) or swap to a close variation at a block boundary.", cite: "Kassiano 2022; Robinson et al. 2024", muscles: [...new Set(stalls.flatMap((x) => exerciseMuscles(x).p))] });
+      }
+    }
+
+    // 7) Rest timer.
+    if (state.settings.restTimerEnabled && (state.settings.restTimerSec || 120) < 90) {
+      out.push({ kind: "info", pri: 6, title: `Rest timer is ${state.settings.restTimerSec}s`, body: "More than ~60–90 s between sets slightly favours growth; heavy strength sets want 3–5 min.", cite: "Singer et al. 2024", muscles: [] });
+    }
+
+    if (easyWeek) out.push({ kind: "info", pri: 4, title: `${block} week: volume and effort checks paused`, body: "Lower volume and easier sets are the point this week. The coach picks back up next week.", cite: null, muscles: [] });
+    const ord = { warn: 0, suggest: 1, good: 2, info: 3 };
+    return out.sort((a, b) => ord[a.kind] - ord[b.kind] || (a.pri || 9) - (b.pri || 9));
+  }
+
+  function trainingInsightCardHtml(i) {
+    return `
+      <div class="suggest-card ${i.kind === "good" ? "" : "suggest-hold"} coach-${i.kind}">
+        <span class="suggest-icon">${i.kind === "warn" ? "!" : i.kind === "suggest" ? "+" : i.kind === "good" ? "▲" : "→"}</span>
+        <div style="flex:1; min-width:0;">
+          <div class="suggest-title">${escapeHtml(i.title)}</div>
+          <div class="tiny muted">${escapeHtml(i.body)}</div>
+          ${i.cite ? `<div class="coach-cite">${escapeHtml(i.cite)}</div>` : ""}
+        </div>
+      </div>`;
+  }
+
+  function renderTrainingCoachHtml(opts = {}) {
+    const all = trainingInsights();
+    let list = all;
+    if (opts.muscles) list = all.filter((i) => i.muscles.some((m) => opts.muscles.includes(m)) && i.kind !== "info");
+    if (opts.limit) list = list.slice(0, opts.limit);
+    if (!list.length && !opts.alwaysShow) return "";
+    return `
+      <div class="section">
+        <div class="row" style="margin-bottom:8px;">
+          <h3 style="margin:0;">${escapeHtml(opts.title || "Training coach")}</h3>
+          ${opts.more && all.length > list.length ? `<button class="link-btn small" data-action="go-analytics">All ${all.length} ›</button>` : ""}
+        </div>
+        ${list.length ? list.map(trainingInsightCardHtml).join("") : `<div class="card small muted">Nothing to flag. Volume, effort and exercise mix all look on track.</div>`}
+        ${opts.askClaude ? askClaudeButtonHtml() : ""}
+      </div>`;
+  }
+
+  // ===== Ask Claude (copy-paste hand-off, no API) =====
+  function askClaudeButtonHtml() {
+    return `
+      <div class="ask-claude">
+        <button class="btn" data-action="ask-claude">Ask Claude: copy my training data</button>
+        <div class="tiny muted" style="margin-top:6px;">Copies a full summary (profile, last 4 weeks of sets, volume per muscle, strength levels, coach flags) to paste into a Claude chat.</div>
+      </div>`;
+  }
+
+  function buildClaudeExport() {
+    const L = [];
+    const bw = bodyWeightOn();
+    const h = state.settings.heightIn;
+    const ps = (() => { try { return programState(); } catch (e) { return null; } })();
+    L.push("I track my lifting in my app (Just Lift). Act as my strength and hypertrophy coach. Using the data below and current evidence-based training research, tell me:");
+    L.push("1) what's going well, 2) what I'm under- or over-doing per muscle, 3) whether I'm pushing hard enough, 4) exercises I'm neglecting, and 5) exactly what to change next week. Respect my program constraints listed below.");
+    L.push("");
+    L.push("## Me");
+    L.push(`- Male${bw ? `, ${Math.round(bw)} lb` : ""}${h ? `, ${Math.floor(h / 12)}'${Math.round(h % 12)}"` : ""}`);
+    if (ps && !ps.post) {
+      L.push(`- Program: week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks}, ${ps.row.block} block, RPE cap ${ps.row.rpeCap} (${ps.dateRange})`);
+      if (PROGRAM_PLAN.oneRm) L.push(`- 1RM inputs: ${Object.entries(PROGRAM_PLAN.oneRm).map(([k, v]) => `${k} ${v}`).join(", ")}`);
+    }
+    const r = programRules();
+    const cons = ["hinge", "squatVolume", "shoulder", "perSession"].filter((k) => r[k]);
+    if (cons.length) { L.push("- Constraints:"); cons.forEach((k) => L.push(`  - ${k}: ${r[k]}`)); }
+    L.push("");
+    const recent = workoutsWithin(28);
+    const earliest = recent.length ? Math.min(...recent.map((w) => new Date(w.date).getTime())) : Date.now();
+    const weeks = Math.max(1, Math.min(4, (Date.now() - earliest) / (7 * 86400000) + 1 / 7));
+    const vol = fractionalVolume(recent);
+    L.push(`## Weekly fractional sets per muscle (last ${weeks.toFixed(1)} wk; primary 1, secondary 0.5)`);
+    Object.keys(MUSCLE_LABELS).forEach((m) => { const v = (vol.total[m] || 0) / weeks; if (v > 0 || MUSCLE_TARGETS[m]) L.push(`- ${MUSCLE_LABELS[m]}: ${v.toFixed(1)}${MUSCLE_TARGETS[m] ? ` (target ${MUSCLE_TARGETS[m][0]}–${MUSCLE_TARGETS[m][1]})` : ""}`); });
+    L.push("");
+    const ids = new Set(); state.workouts.forEach((w) => w.exercises.forEach((e) => ids.add(e.exerciseId)));
+    const ranks = [...ids].map((id) => ({ ex: exerciseById(id), r: bestStrengthRank(id) })).filter((x) => x.ex && x.r).sort((a, b) => b.r.pctl - a.r.pctl);
+    if (ranks.length) {
+      L.push("## Strength levels (best set vs strengthlevel.com male standards at my bodyweight)");
+      ranks.forEach(({ ex, r: k }) => L.push(`- ${ex.name}: ${k.level}, ~${Math.round(k.pctl)}th pct (best ${k.set.weight}×${k.set.reps}${k.unit === "lb" ? `, e1RM ${Math.round(k.value)}` : ""})`));
+      L.push("");
+    }
+    const ins = trainingInsights();
+    if (ins.length) { L.push("## My app's coach flags"); ins.forEach((i) => L.push(`- [${i.kind}] ${i.title}: ${i.body}`)); L.push(""); }
+    L.push("## Workouts, last 4 weeks (weight lb × reps @RPE; W = warm-up)");
+    recent.slice().reverse().forEach((w) => {
+      L.push(`### ${new Date(w.date).toISOString().slice(0, 10)} · ${w.name}${typeof w.effortScore === "number" ? ` · effort ${w.effortScore}%` : ""}${w.durationSec ? ` · ${Math.round(w.durationSec / 60)} min` : ""}`);
+      w.exercises.forEach((e) => {
+        const sets = e.sets.filter((s) => s.completed).map((s) => `${s.isWarmup ? "W " : ""}${s.weight || 0}×${s.reps}${typeof s.rpe === "number" ? `@${s.rpe}` : ""}${s.type === "failure" ? " (fail)" : ""}`);
+        if (sets.length) L.push(`- ${e.name}: ${sets.join(", ")}`);
+      });
+    });
+    return L.join("\n");
+  }
+
+  async function copyClaudeExport() {
+    const text = buildClaudeExport();
+    let ok = false;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) { ok = false; }
+    if (!ok) {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
+        document.body.appendChild(ta); ta.select(); ok = document.execCommand("copy"); ta.remove();
+      } catch (e) { ok = false; }
+    }
+    showAskClaudeSheet(text, ok);
+  }
+
+  function showAskClaudeSheet(text, copied) {
+    const wrap = document.createElement("div");
+    wrap.className = "ask-sheet-backdrop";
+    wrap.innerHTML = `
+      <div class="ask-sheet" role="dialog" aria-label="Ask Claude">
+        <div class="suggest-title">${copied ? "Copied. Paste it into Claude." : "Copy this, then paste it into Claude"}</div>
+        <div class="tiny muted" style="margin:4px 0 10px;">${text.length.toLocaleString()} characters. Nothing is sent anywhere; it's only on your clipboard.</div>
+        <textarea class="ask-text" readonly>${escapeHtml(text)}</textarea>
+        <a class="btn btn-primary" href="https://claude.ai/new" target="_blank" rel="noopener" style="margin-top:10px; display:block; text-align:center;">Open Claude</a>
+        <button class="btn" data-ask-close style="margin-top:8px;">Close</button>
+      </div>`;
+    wrap.addEventListener("click", (ev) => { if (ev.target === wrap || ev.target.hasAttribute("data-ask-close")) wrap.remove(); });
+    document.body.appendChild(wrap);
+    if (!copied) { const ta = wrap.querySelector(".ask-text"); ta.focus(); ta.select(); }
+  }
+
+  // Five-segment ladder with a marker at the lifter's percentile.
+  function levelLadderHtml(r) {
+    const segs = [[0, 5], [5, 20], [20, 50], [50, 80], [80, 95], [95, 100]];
+    return `
+      <div class="lvl-ladder">
+        ${segs.map(([a, b], i) => `<span class="lvl-seg lvl-seg-${i}" style="width:${b - a}%"></span>`).join("")}
+        <span class="lvl-marker" style="left:${Math.min(99, Math.max(1, r.pctl)).toFixed(1)}%"></span>
+      </div>
+      <div class="lvl-ticks tiny muted">
+        ${STRENGTH_LEVELS.map((l, i) => `<span style="left:${STRENGTH_LEVEL_PCTL[i]}%">${l.slice(0, 3)}<br>${rankValueLabel(r, r.thresholds[i]).replace(" reps", "").replace(" " + unitLabel(), "")}</span>`).join("")}
+      </div>`;
   }
 
   // Range-of-motion adjustment for height: a taller lifter's limbs travel
@@ -1301,11 +1869,51 @@
 
   function heightRomFactor(ex, heightIn) {
     if (!heightIn) return 1.0;
-    const tier = movementTier(ex ? ex.name : "");
-    const sensitivity = tier === "veryHigh" ? 1 : tier === "high" ? 0.7 : 0;
+    // Library lifts use their difficulty profile: lower/full-body compounds
+    // (m=3) scale fully with height, upper-body compounds (m=2, longer arm
+    // path) at 0.6, single-joint isolation (m=1, fixed joint angle) not at
+    // all. Custom exercises fall back to the name-keyword tier.
+    const d = ex && typeof EXERCISE_DIFFICULTY !== "undefined" ? EXERCISE_DIFFICULTY[ex.id] : null;
+    let sensitivity;
+    if (d) sensitivity = d.m === 3 ? 1 : d.m === 2 ? 0.6 : 0;
+    else {
+      const tier = movementTier(ex ? ex.name : "");
+      sensitivity = tier === "veryHigh" ? 1 : tier === "high" ? 0.7 : 0;
+    }
     if (sensitivity === 0) return 1.0;
     const raw = 1 + (heightIn - HEIGHT_REFERENCE_IN) * HEIGHT_ROM_PER_INCH * sensitivity;
     return Math.max(0.85, Math.min(1.15, raw));
+  }
+
+  // Body mass moved: on lifts where your own body travels with the bar
+  // (squats, lunges, hinges, cleans, standing calf raises…), the real load
+  // per rep is the bar PLUS that share of your bodyweight — the "system
+  // mass" used in biomechanics (work ≈ system mass × ROM). So the same
+  // 315 × 5 squat is more total work for a 240 lb lifter than a 160 lb
+  // one, and a light set is relatively more body than bar. Fractions are
+  // standard segment-mass approximations (shanks/feet stay put in a squat
+  // ≈ 0.85 of BW rises; a hinge moves the torso/arms/head ≈ 0.5).
+  // Scored relative to a 180 lb reference lifter so the average lifter
+  // reads as 1.0. Bodyweight-equipment lifts already count full BW as the
+  // load (effectiveLoad), so they're left at 1.0 here — no double count.
+  const BODY_MASS_FRACTION = {
+    "squat": 0.85, "front-squat": 0.85, "pause-squat": 0.85, "box-squat": 0.85, "zercher-squat": 0.85,
+    "goblet-squat": 0.85, "sumo-squat": 0.85, "hack-squat": 0.85, "belt-squat": 0.85,
+    "walking-lunge": 0.85, "reverse-lunge": 0.85, "step-up": 0.85, "bulgarian-split-squat": 0.85,
+    "thruster": 0.85, "power-clean": 0.7, "clean-and-jerk": 0.85, "snatch": 0.85,
+    "deadlift": 0.5, "sumo-deadlift": 0.5, "deficit-deadlift": 0.5, "trap-bar-deadlift": 0.55, "rack-pull": 0.35,
+    "romanian-deadlift": 0.5, "good-morning": 0.5, "kettlebell-swing": 0.35, "hip-thrust": 0.4,
+    "push-press": 0.3, "calf-raise": 0.95, "smith-machine-calf-raise": 0.95,
+  };
+  const BODY_MASS_REFERENCE_LB = 180;
+
+  function bodyMassWorkFactor(ex, load, bodyWeight) {
+    if (!ex || ex.equipment === "Bodyweight" || !(bodyWeight > 0)) return 1.0;
+    const f = BODY_MASS_FRACTION[ex.id] || 0;
+    if (!f) return 1.0;
+    const l = Math.max(0, load || 0);
+    const raw = (l + f * bodyWeight) / (l + f * BODY_MASS_REFERENCE_LB);
+    return Math.max(0.8, Math.min(1.3, raw));
   }
 
   // Best-ever estimated 1RM for an exercise across all completed history
@@ -1378,7 +1986,19 @@
   // signal), then capped by session coverage (see workoutCoverage) so a
   // one-exercise session can't read as near-total effort no matter how
   // hard that one exercise was.
-  const EFFORT_WEIGHTS = { intensity: 0.40, muscle: 0.35, volume: 0.25 };
+  //
+  //  4. STRENGTH (v6) — how heavy the session was in absolute terms, for a
+  //     lifter of your size: each ranked exercise's best set placed against
+  //     Strength Level's male standards AT YOUR BODYWEIGHT that day (the
+  //     same "how strong for your bodyweight" idea as Wilks/DOTS, per lift).
+  //     Session value = difficulty-weighted average percentile, so a heavy
+  //     squat counts for more than a strong curl. Scored 0–100 directly
+  //     (percentile = score). Sessions with no rankable lift (or no logged
+  //     bodyweight) skip this axis and the other three re-normalize.
+  //
+  // Weights: the original 40/35/25 balance scaled by 0.8 to make room for
+  // strength at 20% — so intensity:muscle:volume keep their ratio.
+  const EFFORT_WEIGHTS = { intensity: 0.32, muscle: 0.28, volume: 0.20, strength: 0.20 };
   // Absolute reference points each axis is scored against (see comment
   // above) — not derived from this person's history, so they don't drift.
   const INTENSITY_RPE_FLOOR = 5;    // RPE at/below this scores 0
@@ -1396,12 +2016,13 @@
   // Per-set contributions to the three axes. Returns null for warmups,
   // incomplete or empty sets. `bestE1rm` = personal-best estimated 1RM for
   // this exercise (used both as the %1RM reference and to estimate RIR).
-  function setEffortMetrics(set, ex, bestE1rm) {
+  function setEffortMetrics(set, ex, bestE1rm, bodyWeight) {
     if (!set || !set.completed || set.isWarmup) return null;
     const reps = set.reps || 0;
     if (reps <= 0) return null;
     const load = effectiveLoad(set, ex);
-    const diff = exerciseDifficulty(ex) * heightRomFactor(ex, state.settings.heightIn);
+    const bw = bodyWeight != null ? bodyWeight : currentBodyWeightLb();
+    const diff = exerciseDifficulty(ex) * heightRomFactor(ex, state.settings.heightIn) * bodyMassWorkFactor(ex, set.weight || 0, bw);
     let pct, rir;
     if (load <= 0) {
       pct = UNWEIGHTED_PCT; rir = UNWEIGHTED_RIR;
@@ -1430,14 +2051,22 @@
   // Sums the three axes over a workout. `bestFor(exerciseId)` supplies the
   // personal-best e1RM reference — live scoring uses all-time bests, the
   // history backfill uses bests-as-of-that-date.
-  function workoutEffortMetrics(exercises, bestFor) {
-    const totals = { topRpe: 0, muscle: 0, volume: 0 };
+  function workoutEffortMetrics(exercises, bestFor, dateIso) {
+    const totals = { topRpe: 0, muscle: 0, volume: 0, strength: null };
+    const bw = bodyWeightOn(dateIso);
+    let strengthSum = 0, strengthWeight = 0;
     for (const e of exercises) {
       const ex = exerciseById(e.exerciseId);
       if (!ex) continue;
+      const rank = rankSets(ex, e.sets, dateIso);
+      if (rank) {
+        const w = exerciseDifficulty(ex);
+        strengthSum += rank.pctl * w;
+        strengthWeight += w;
+      }
       const best = bestFor(e.exerciseId);
       for (const s of e.sets) {
-        const m = setEffortMetrics(s, ex, best);
+        const m = setEffortMetrics(s, ex, best, bw);
         if (!m) continue;
         // Intensity is a peak (hardest single set of the session);
         // muscle and volume accumulate.
@@ -1446,6 +2075,7 @@
         totals.volume += m.volume;
       }
     }
+    if (strengthWeight > 0) totals.strength = strengthSum / strengthWeight;
     return totals;
   }
 
@@ -1460,15 +2090,22 @@
     ));
     const muscleScore = Math.max(0, Math.min(100, (metrics.muscle / MUSCLE_FULL_SESSION_REPS) * 100));
     const volumeScore = Math.max(0, Math.min(100, (metrics.volume / VOLUME_FULL_SESSION_INOL) * 100));
+    const hasStrength = typeof metrics.strength === "number";
+    const strengthScore = hasStrength ? Math.max(0, Math.min(100, metrics.strength)) : null;
     const breakdown = {
       intensity: Math.round(intensityScore),
       muscle: Math.round(muscleScore),
       volume: Math.round(volumeScore),
+      strength: hasStrength ? Math.round(strengthScore) : null,
     };
-    const blended =
-      EFFORT_WEIGHTS.intensity * (intensityScore / 100) +
-      EFFORT_WEIGHTS.muscle * (muscleScore / 100) +
-      EFFORT_WEIGHTS.volume * (volumeScore / 100);
+    const W = EFFORT_WEIGHTS;
+    const totalW = W.intensity + W.muscle + W.volume + (hasStrength ? W.strength : 0);
+    const blended = (
+      W.intensity * (intensityScore / 100) +
+      W.muscle * (muscleScore / 100) +
+      W.volume * (volumeScore / 100) +
+      (hasStrength ? W.strength * (strengthScore / 100) : 0)
+    ) / totalW;
     const score = Math.min(Math.round(blended * 100), Math.round(coverage * 100));
     return { score, breakdown };
   }
@@ -1510,7 +2147,7 @@
   // Bump this whenever the effort formula changes meaningfully, so
   // existing history gets recomputed under the new rules instead of
   // being stuck with scores from an old formula (see backfillEffortScores).
-  const EFFORT_SCORE_VERSION = 5;
+  const EFFORT_SCORE_VERSION = 6;
 
   // One-time-per-version migration: (re)computes effort metrics/scores for
   // any workout that either predates this feature or was scored under an
@@ -1526,7 +2163,7 @@
     const bestE1rmSoFar = {};
     for (const w of chron) {
       if (w.effortVersion !== EFFORT_SCORE_VERSION) {
-        const metrics = workoutEffortMetrics(w.exercises, (id) => bestE1rmSoFar[id] || 0);
+        const metrics = workoutEffortMetrics(w.exercises, (id) => bestE1rmSoFar[id] || 0, w.date);
         const { score, breakdown } = scoreEffort(metrics, workoutCoverage(w.exercises));
         w.effortMetrics = metrics;
         w.effortBreakdown = breakdown;
@@ -1567,52 +2204,6 @@
     navigate("workout-active");
   }
 
-  // ---------- NOOP hand-off ----------
-  // NOOP (the offline WHOOP-strap app) accepts workouts through a deep link:
-  //   noop://import-health?v=1&payload=<base64 text>
-  // one line per workout: W,startUnix,endUnix,sport,durationS,energyKcal,distanceM
-  // Only the session summary travels — NOOP's link has no notes/sets field,
-  // and NOOP scores strain from the strap's heart rate, not from sets/reps.
-  // Sport stays "Strength Training" (NOOP's own lifting token) so sessions
-  // group and get the right icon; the routine name is NOT stuffed in.
-  const NOOP_SPORT = "Strength Training";
-
-  function noopWorkoutLine(w) {
-    const start = Math.floor(new Date(w.date).getTime() / 1000);
-    const dur = Math.max(0, Math.round(w.durationSec || 0));
-    if (!Number.isFinite(start)) return null;
-    return `W,${start},${start + dur},${NOOP_SPORT},${dur},,`;
-  }
-
-  function noopImportUrl(w) {
-    const line = noopWorkoutLine(w);
-    if (!line) return null;
-    // URL-safe base64, no padding — NOOP accepts both alphabets and missing
-    // padding, and this needs no percent-encoding in the query string.
-    const b64 = btoa(line).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    return `noop://import-health?v=1&payload=${b64}`;
-  }
-
-  async function sendWorkoutToNoop(w) {
-    const url = noopImportUrl(w);
-    if (!url) { showToast("Couldn't build the NOOP link"); return; }
-    w.sentToNoopAt = new Date().toISOString();
-    w.noopPrompted = true;
-    await DB.put("workouts", w);
-    window.location.href = url;
-  }
-
-  async function maybePromptNoop(w) {
-    if (!state.settings.noopPromptEnabled || w.noopPrompted) return;
-    w.noopPrompted = true;
-    await DB.put("workouts", w);
-    const ok = await showConfirm(
-      "Add this session to NOOP with its exact start and end time? NOOP will ask you to confirm the import.",
-      { title: "Send to NOOP?", okLabel: "Send to NOOP", cancelLabel: "Not now" }
-    );
-    if (ok) await sendWorkoutToNoop(w);
-  }
-
   async function finishWorkout() {
     const w = state.activeWorkout;
     if (!w) return;
@@ -1637,7 +2228,7 @@
     // Effort score must be computed while state.workouts still only holds
     // *prior* workouts (bestE1rmAllTime scans it for the %1RM reference),
     // so this has to happen before the unshift below.
-    const effortMetrics = workoutEffortMetrics(cleanExercises, (id) => bestE1rmAllTime(id));
+    const effortMetrics = workoutEffortMetrics(cleanExercises, (id) => bestE1rmAllTime(id), w.startedAt);
     const { score: effortScore, breakdown: effortBreakdown } =
       scoreEffort(effortMetrics, workoutCoverage(cleanExercises));
 
@@ -1661,8 +2252,6 @@
     endRestTimer(false);
     await DB.kvSet("activeWorkout", null);
     navigate("workout-complete", { id: record.id });
-    // Let the completion screen land first, then ask.
-    setTimeout(() => { maybePromptNoop(record); }, 900);
   }
 
   function discardWorkout() {
@@ -1827,6 +2416,7 @@
         </div>` : ""}
 
       ${renderProgramCardHtml()}
+      ${renderTrainingCoachHtml({ title: "Coach says", limit: 2, more: true })}
 
       <button class="btn btn-primary" data-action="start-empty" style="margin-bottom:16px;">+ Start empty workout</button>
 
@@ -1931,10 +2521,10 @@
       body.innerHTML = list.map((ex) => `
         <div class="list-row card-tap" data-action="view-exercise" data-id="${ex.id}">
           <div>
-            <div class="row-title">${escapeHtml(ex.name)}</div>
+            <div class="row-title">${tierChipHtml(ex)} ${escapeHtml(ex.name)}</div>
             <div class="tiny muted">${ex.muscle}</div>
           </div>
-          <span class="muted">›</span>
+          <span>${levelBadgeHtml(bestStrengthRank(ex.id))} <span class="muted">›</span></span>
         </div>
       `).join("");
     }
@@ -2063,23 +2653,18 @@
   // weekly sets — the RP/Israetel rule-of-thumb band).
   const STIM_MEV = 10, STIM_MRV = 20;
   function muscleStimulus(days = 28) {
-    const cutoff = Date.now() - days * 86400000;
-    const counts = {};
-    for (const w of state.workouts) {
-      if (new Date(w.date).getTime() < cutoff) continue;
-      for (const e of w.exercises) {
-        const ex = exerciseById(e.exerciseId);
-        if (!ex) continue;
-        const working = e.sets.filter((s) => s.completed && !s.isWarmup).length;
-        if (working) counts[ex.muscle] = (counts[ex.muscle] || 0) + working;
-      }
-    }
-    const weeksSpanned = days / 7;
-    return Object.entries(counts)
-      .map(([muscle, sets]) => {
+    // Fractional sets per muscle (primary 1, helper 0.5 — Pelland 2024),
+    // averaged per week over the span actually logged (max `days`).
+    const recent = workoutsWithin(days);
+    if (!recent.length) return [];
+    const earliest = Math.min(...recent.map((w) => new Date(w.date).getTime()));
+    const weeksSpanned = Math.max(1, Math.min(days / 7, (Date.now() - earliest) / (7 * 86400000) + 1 / 7));
+    const { total } = fractionalVolume(recent);
+    return Object.entries(total)
+      .map(([m, sets]) => {
         const perWeek = sets / weeksSpanned;
         const zone = perWeek < STIM_MEV ? "low" : perWeek <= STIM_MRV ? "optimal" : "high";
-        return { muscle, perWeek, zone };
+        return { muscle: MUSCLE_LABELS[m] || m, perWeek, zone };
       })
       .sort((a, b) => b.perWeek - a.perWeek);
   }
@@ -2088,17 +2673,18 @@
   // the last 28 days vs. the 28 days before that.
   function effortAxisTrend() {
     const now = Date.now();
-    const cur = { intensity: [], muscle: [], volume: [] };
-    const prev = { intensity: [], muscle: [], volume: [] };
+    const cur = { intensity: [], muscle: [], volume: [], strength: [] };
+    const prev = { intensity: [], muscle: [], volume: [], strength: [] };
     for (const w of state.workouts) {
       if (!w.effortBreakdown) continue;
       const age = now - new Date(w.date).getTime();
       const bucket = age <= 28 * 86400000 ? cur : age <= 56 * 86400000 ? prev : null;
       if (!bucket) continue;
       for (const k of ["intensity", "muscle", "volume"]) bucket[k].push(w.effortBreakdown[k] || 0);
+      if (typeof w.effortBreakdown.strength === "number") bucket.strength.push(w.effortBreakdown.strength);
     }
     const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
-    return ["intensity", "muscle", "volume"].map((k) => ({
+    return ["intensity", "muscle", "volume", "strength"].map((k) => ({
       axis: k,
       current: avg(cur[k]),
       previous: avg(prev[k]),
@@ -2163,6 +2749,48 @@
     `;
   }
 
+  // Analytics: your strength level on every ranked lift you've logged
+  // (strongest first), plus the full difficulty ranking of the library.
+  function renderAnalyticsLevelsHtml() {
+    const ids = new Set();
+    state.workouts.forEach((w) => w.exercises.forEach((e) => ids.add(e.exerciseId)));
+    const ranked = [...ids].map((id) => ({ ex: exerciseById(id), r: bestStrengthRank(id) }))
+      .filter((x) => x.ex && x.r).sort((a, b) => b.r.pctl - a.r.pctl);
+    const lib = allExercises().map((ex) => ({ ex, d: difficultyInfo(ex) }))
+      .sort((a, b) => b.d.points - a.d.points || a.ex.name.localeCompare(b.ex.name));
+    const byTier = ["S", "A", "B", "C", "D"].map((t) => ({ t, list: lib.filter((x) => x.d.tier === t) })).filter((g) => g.list.length);
+    const TIER_NOTES = { S: "heavy, axial-loaded full-body lifts", A: "big lower-body & loaded compounds", B: "upper-body compounds & machine leg work", C: "lighter compounds & loaded isolation", D: "single-joint isolation" };
+    return `
+      ${ranked.length ? `
+        <div class="section">
+          <h3>Strength levels</h3>
+          <div class="card">
+            ${ranked.map(({ ex, r }) => `
+              <div class="lvl-row card-tap" data-action="view-exercise" data-id="${ex.id}">
+                <span class="lvl-row-name">${tierChipHtml(ex)} ${escapeHtml(ex.name)}</span>
+                <span class="lvl-row-track"><span class="lvl-row-fill lvl-fill-${r.levelIndex}" style="width:${Math.max(2, r.pctl).toFixed(1)}%"></span></span>
+                ${levelBadgeHtml(r)}
+              </div>`).join("")}
+            <div class="tiny muted" style="margin-top:8px;">Your best set on each lift vs. strengthlevel.com male standards at your bodyweight. Bar = share of lifters you out-lift.</div>
+          </div>
+        </div>` : ""}
+      <div class="section">
+        <h3>Exercise difficulty ranking</h3>
+        <div class="card">
+          ${byTier.map((g) => `
+            <details class="tier-group">
+              <summary><span class="tier-chip tier-${g.t}">${g.t}</span> <span class="small">${TIER_NOTES[g.t]}</span> <span class="tiny muted">· ${g.list.length}</span></summary>
+              ${g.list.map(({ ex, d }) => `
+                <div class="list-row card-tap" data-action="view-exercise" data-id="${ex.id}">
+                  <span class="small">${escapeHtml(ex.name)}</span>
+                  <span class="tiny muted">${d.points}/10${d.estimated ? " · est." : ""}</span>
+                </div>`).join("")}
+            </details>`).join("")}
+          <div class="tiny muted" style="margin-top:8px;">Points = 2 × muscle mass + spinal load + skill. Higher tiers count for more in your effort score.</div>
+        </div>
+      </div>`;
+  }
+
   function renderAnalytics() {
     // --- snapshot (last 28 days) ---
     const cutoff28 = Date.now() - 28 * 86400000;
@@ -2193,7 +2821,7 @@
     const stim = muscleStimulus();
     const axes = effortAxisTrend();
     const prs = recentPRs();
-    const AXIS_LABELS = { intensity: "Intensity", muscle: "Muscle", volume: "Volume" };
+    const AXIS_LABELS = { intensity: "Intensity", muscle: "Muscle", volume: "Volume", strength: "Strength" };
 
     // Load-meter marker position: map ratio 0–2 onto 0–100%.
     const loadPos = load ? Math.min(100, Math.max(0, (load.ratio / 2) * 100)) : 0;
@@ -2216,6 +2844,8 @@
       </div>
 
       ${renderCoachSectionHtml()}
+
+      ${renderTrainingCoachHtml({ askClaude: true, alwaysShow: true })}
 
       ${lifts.length ? `
         <div class="section">
@@ -2281,7 +2911,7 @@
               <span><i class="stim-dot stim-optimal"></i>${STIM_MEV}–${STIM_MRV} growth zone</span>
               <span><i class="stim-dot stim-high"></i>&gt;${STIM_MRV} very high</span>
             </div>
-            <div class="tiny muted" style="margin-top:6px;">Avg hard sets per muscle per week, last 4 weeks. The shaded band is the ~${STIM_MEV}–${STIM_MRV} set hypertrophy zone (MEV→MRV).</div>
+            <div class="tiny muted" style="margin-top:6px;">Avg fractional sets per muscle per week, last 4 weeks (1 per set for the target muscle, 0.5 for helpers). The shaded band is the ~${STIM_MEV}–${STIM_MRV} set hypertrophy zone (MEV→MRV).</div>
           </div>
         </div>
       ` : ""}
@@ -2304,6 +2934,8 @@
         </div>
       ` : ""}
 
+      ${renderAnalyticsLevelsHtml()}
+
       ${prs.length ? `
         <div class="section">
           <h3>Recent PRs</h3>
@@ -2325,6 +2957,62 @@
     if (e1rmData.length >= 2) {
       initProgressChart(document.getElementById("progress-chart"), e1rmData, (v) => `${roundClean(v)} ${unitLabel()} e1RM`);
     }
+  }
+
+  function renderStrengthLevelCard(ex) {
+    const std = strengthStandardFor(ex);
+    if (!std) return "";
+    if (!(bodyWeightOn() > 0)) {
+      return `<div class="card lvl-card"><h3>Strength level</h3><div class="small muted">Log your bodyweight in Settings to see where your ${escapeHtml(ex.name.toLowerCase())} ranks.</div></div>`;
+    }
+    const r = bestStrengthRank(ex.id);
+    if (!r) {
+      return `<div class="card lvl-card"><h3>Strength level</h3><div class="small muted">Log a working set${std.unit === "lb" ? ` of ${RANK_MAX_REPS} reps or fewer` : ""} to get ranked.</div></div>`;
+    }
+    const what = r.unit === "reps" ? "Best set" : "Best e1RM";
+    return `
+      <div class="card lvl-card">
+        <div class="row" style="align-items:center;">
+          <h3 style="margin:0;">Strength level</h3>
+          ${levelBadgeHtml(r)}
+        </div>
+        <div class="lvl-headline">${r.belowBeginner ? "Building toward Beginner" : `Stronger than ~${Math.round(r.pctl)}% of lifters`}</div>
+        <div class="tiny muted">${what} ${rankValueLabel(r, r.value)} (${weightToDisplay(r.set.weight)} ${unitLabel()} × ${r.set.reps}, ${fmtDate(r.date)}) at ${Math.round(weightToDisplay(r.bodyWeight))} ${unitLabel()} bodyweight</div>
+        ${levelLadderHtml(r)}
+        ${r.next ? `<div class="small" style="margin-top:10px;">Next: <b>${r.next.level}</b> at ${rankValueLabel(r, r.next.target)} <span class="muted">(+${rankValueLabel(r, Math.max(0, r.next.gap))})</span></div>` : `<div class="small" style="margin-top:10px;"><b>Elite.</b> Top 5% of lifters for this lift.</div>`}
+        <div class="tiny muted" style="margin-top:6px;">Male standards from strengthlevel.com community lifts. Beginner/Novice/Intermediate/Advanced/Elite = stronger than 5/20/50/80/95% of lifters.</div>
+      </div>`;
+  }
+
+  function renderDifficultyCard(ex) {
+    const d = difficultyInfo(ex);
+    if (!d) return "";
+    const parts = d.parts
+      ? `Muscle mass ${d.parts.m}/3 · Spinal load ${d.parts.a}/2 · Skill ${d.parts.s}/2`
+      : "Estimated from the exercise's muscle group, equipment and name";
+    // Personal adjustments: height (range of motion) and bodyweight (body
+    // mass moved), shown at your best recent working weight.
+    const bw = bodyWeightOn();
+    const hf = heightRomFactor(ex, state.settings.heightIn);
+    const refLoad = bestWeightFor(ex.id) || 0;
+    const bf = bodyMassWorkFactor(ex, refLoad, bw);
+    const pctTxt = (f) => `${f >= 1 ? "+" : "−"}${Math.abs((f - 1) * 100).toFixed(1)}%`;
+    const bits = [];
+    if (state.settings.heightIn && hf !== 1) bits.push(`height ${pctTxt(hf)} (range of motion)`);
+    if (bf !== 1) bits.push(`bodyweight ${pctTxt(bf)} (body mass moved${refLoad ? ` at ${weightToDisplay(refLoad)} ${unitLabel()}` : ""})`);
+    if (ex.equipment === "Bodyweight") bits.push(`your ${Math.round(weightToDisplay(bw || DEFAULT_BODYWEIGHT_LB))} ${unitLabel()} bodyweight is the load`);
+    const personal = bits.length
+      ? `<div class="small" style="margin-top:8px;">For you: ${bits.join(" · ")} → ×${(d.factor * hf * bf).toFixed(2)}</div>`
+      : (!state.settings.heightIn ? `<div class="tiny muted" style="margin-top:6px;">Add your height in Settings to adjust for range of motion.</div>` : "");
+    return `
+      <div class="card lvl-card">
+        <div class="row" style="align-items:center;">
+          <h3 style="margin:0;">Difficulty</h3>
+          <span>${tierChipHtml(ex)} <span class="small muted">${d.points}/10</span></span>
+        </div>
+        <div class="tiny muted" style="margin-top:6px;">${parts}. Base ×${d.factor.toFixed(2)} toward your effort score.</div>
+        ${personal}
+      </div>`;
   }
 
   function renderExerciseDetail(params) {
@@ -2356,6 +3044,9 @@
       </div>
       <h1>${escapeHtml(ex.name)}</h1>
       <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">${ex.muscle} · ${ex.equipment}</div>
+
+      ${renderStrengthLevelCard(ex)}
+      ${renderDifficultyCard(ex)}
 
       ${bestSet ? `
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:16px;">
@@ -2610,7 +3301,7 @@
               <span class="muted small">${unitLabel()}</span>
             </div>
           </div>
-          <div class="tiny muted" style="margin-top:8px; margin-bottom:${bwData.length >= 2 ? "12px" : "12px"};">Updating this logs a dated entry so you can track your weight over time. Also scores bodyweight exercises (push-ups, pull-ups, planks). Without it we assume ${DEFAULT_BODYWEIGHT_LB} lb.</div>
+          <div class="tiny muted" style="margin-top:8px; margin-bottom:${bwData.length >= 2 ? "12px" : "12px"};">Updating this logs a dated entry so you can track your weight over time. Feeds your effort score three ways: it's the load on bodyweight moves (push-ups, pull-ups), it adds the body mass you move on squats, lunges and hinges, and your Strength axis/level is judged against lifters your bodyweight. Without it we assume ${DEFAULT_BODYWEIGHT_LB} lb for loads and skip strength levels.</div>
           ${bwData.length >= 2 ? `<div class="chart-wrap" style="margin-bottom:12px;">${renderLineChart(bwData, { label: "Body weight over recent entries" })}</div>` : ""}
           <div class="row" style="border-top:1px solid var(--border); padding-top:12px;">
             <span>Your height</span>
@@ -2621,7 +3312,7 @@
               <span class="muted small">${heightUnitLabel()}</span>
             </div>
           </div>
-          <div class="tiny muted" style="margin-top:8px;">Used to fairly adjust effort scoring for range of motion on lifts like squats, deadlifts, and presses — taller lifters move the weight farther per rep. Isolation exercises aren't affected. Leaving this blank skips the adjustment entirely.</div>
+          <div class="tiny muted" style="margin-top:8px;">Adjusts effort for range of motion — taller lifters move the weight farther per rep (±0.5% per inch from 5'8"): fully on squats, deadlifts, lunges and cleans, 60% on presses, rows and pull-ups. Isolation exercises aren't affected. Leaving this blank skips the adjustment entirely.</div>
         </div>
       </div>
 
@@ -2691,14 +3382,6 @@
               </div>
             </div>` : ""}
           <div class="tiny muted" style="margin-top:8px;">Off by default. When on, a countdown starts automatically after you complete a working set.</div>
-          <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
-            <span>Ask to send to NOOP</span>
-            <div class="segmented" style="width:120px;">
-              <button data-action="set-noop-prompt" data-value="on" class="${s.noopPromptEnabled ? "active" : ""}">On</button>
-              <button data-action="set-noop-prompt" data-value="off" class="${s.noopPromptEnabled ? "" : "active"}">Off</button>
-            </div>
-          </div>
-          <div class="tiny muted" style="margin-top:8px;">After you finish, offers to add the session to NOOP with its exact start and end time. Only the summary is sent — sets stay here. You can always send from a workout's detail page.</div>
         </div>
       </div>
 
@@ -2950,6 +3633,27 @@
   // Peak-End: the last thing someone sees when they finish a workout
   // shouldn't just be a toast — it's the "ending" moment, so it gets a
   // dedicated screen with a celebratory beat and a clear close.
+  function renderWorkoutLevelsHtml(w) {
+    const rows = w.exercises.map((e) => {
+      const ex = exerciseById(e.exerciseId);
+      const r = rankSets(ex, e.sets, w.date);
+      return r ? { ex, r } : null;
+    }).filter(Boolean);
+    if (!rows.length) return "";
+    return `
+      <div class="card lvl-card" style="text-align:left;">
+        <h3>Strength levels today</h3>
+        ${rows.map(({ ex, r }) => `
+          <div class="list-row card-tap" data-action="view-exercise" data-id="${ex.id}">
+            <div>
+              <div class="row-title">${escapeHtml(ex.name)}</div>
+              <div class="tiny muted">${weightToDisplay(r.set.weight)} ${unitLabel()} × ${r.set.reps} · top ${Math.max(0.1, 100 - r.pctl) < 1 ? "1" : Math.round(100 - r.pctl)}%</div>
+            </div>
+            ${levelBadgeHtml(r)}
+          </div>`).join("")}
+      </div>`;
+  }
+
   function renderWorkoutComplete(params) {
     const w = state.workouts.find((x) => x.id === params.id);
     if (!w) { navigate("home"); return; }
@@ -2970,10 +3674,11 @@
           <div class="stat-card"><div class="stat-label">Sets logged</div><div class="stat-value">${setCount}</div></div>
           <div class="stat-card"><div class="stat-label">Exercises</div><div class="stat-value">${w.exercises.length}</div></div>
         </div>
+        ${renderWorkoutLevelsHtml(w)}
+        <div style="text-align:left; width:100%;">${renderTrainingCoachHtml({ title: "Coach notes", muscles: [...new Set(w.exercises.flatMap((e) => { const m = exerciseMuscles(exerciseById(e.exerciseId)); return m.p; }))], limit: 3, askClaude: true, alwaysShow: true })}</div>
         <div class="small muted" style="text-align:center;">${escapeHtml(effortCaption(hasEffort ? w.effortScore : 0, hasPr, workoutCoverage(w.exercises)))}</div>
         <div class="complete-actions">
           <button class="btn btn-primary" data-action="complete-done">Done</button>
-          <button class="btn" style="margin-top:10px;" data-action="send-noop" data-id="${w.id}">${w.sentToNoopAt ? "Sent to NOOP · Send again" : "Send to NOOP"}</button>
         </div>
       </div>
     `;
@@ -3016,6 +3721,7 @@
       { label: "Muscle", sub: "effective reps", value: b.muscle },
       { label: "Work", sub: "volume · INOL", value: b.volume },
     ];
+    if (typeof b.strength === "number") rows.push({ label: "Strength", sub: "vs. lifters your bodyweight", value: b.strength });
     return `
       <div class="effort-breakdown">
         ${rows.map((r) => `
@@ -3069,9 +3775,10 @@
       ${w.exercises.map((ex) => {
         let workingNum = 0;
         const showRpe = ex.sets.some((s) => s.rpe != null);
+        const lvl = rankSets(exerciseById(ex.exerciseId), ex.sets, w.date);
         return `
         <div class="exercise-block">
-          <div class="ex-title">${escapeHtml(ex.name)}</div>
+          <div class="ex-title">${escapeHtml(ex.name)} ${levelBadgeHtml(lvl)}</div>
           ${ex.note ? `<div class="ex-note">${escapeHtml(ex.note)}</div>` : ""}
           <table class="set-table">
             <tr><th>Set</th><th>${unitLabel()}</th><th>Reps</th>${showRpe ? "<th>RPE</th>" : ""}</tr>
@@ -3083,7 +3790,6 @@
           </table>
         </div>
       `; }).join("")}
-      <button class="btn" style="margin-top:8px;" data-action="send-noop" data-id="${w.id}">${w.sentToNoopAt ? "Sent to NOOP · Send again" : "Send to NOOP"}</button>
       <button class="btn btn-danger" style="margin-top:8px;" data-action="delete-workout" data-id="${w.id}">Delete workout</button>
     `;
   }
@@ -3316,6 +4022,7 @@
         break;
       case "complete-done": navigate("home"); break;
       case "go-analytics": navigate("analytics"); break;
+      case "ask-claude": copyClaudeExport(); break;
       case "coach-apply": {
         let set = null;
         try { set = JSON.parse(decodeURIComponent(t.dataset.set)); } catch (err) { break; }
@@ -3357,15 +4064,6 @@
         state.settings.restTimerEnabled = t.dataset.value === "on";
         saveSettings(); render();
         break;
-      case "set-noop-prompt":
-        state.settings.noopPromptEnabled = t.dataset.value === "on";
-        saveSettings(); render();
-        break;
-      case "send-noop": {
-        const w = state.workouts.find((x) => x.id === t.dataset.id);
-        if (w) sendWorkoutToNoop(w);
-        break;
-      }
       case "set-rest-sec":
         state.settings.restTimerSec = parseInt(t.dataset.sec, 10) || 120;
         saveSettings(); render();
