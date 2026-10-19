@@ -20,12 +20,6 @@
       // Dated bodyweight log [{date, lb}] powering the trend chart and the
       // bodyweight-exercise effort scoring. bodyWeightLb mirrors the latest.
       bodyWeightLog: [],
-      // Program tracking: the Sunday week 1 of the 16-week cycle began on.
-      // Clearing it (Settings) turns program tracking + the coach off.
-      programStartDate: (typeof PROGRAM_PLAN !== "undefined" ? PROGRAM_PLAN.defaultStartDate : null),
-      // Coach adjustments the user applied, keyed by week number:
-      // { "9": { bench: 270, scale: 0.95 } } — see program-plan.js.
-      programAdjustments: {},
     },
     customExercises: [],
     routines: [],
@@ -297,8 +291,7 @@
     }
     state.customExercises = customExercises || [];
     state.routines = routines || [];
-    await seedProgram();
-    await syncSeedRoutinesToPlan();
+    await removeLegacyProgram();
     state.workouts = (workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     state.activeWorkout = activeWorkout;
 
@@ -306,54 +299,19 @@
 
   }
 
-  // Seeds (or upgrades) the pre-loaded training program. A fresh install gets
-  // the routines from program-seed.js. When PROGRAM_SEED_VERSION is bumped —
-  // meaning the program itself changed (e.g. v3 -> v3.1) — existing installs
-  // get their old seed-* routines swapped for the new ones. User-created
-  // routines and all workout history/PRs are never touched. An install that
-  // deliberately deleted the seeded program doesn't get it re-added.
-  async function seedProgram() {
-    if (typeof PROGRAM_SEED === "undefined" || !PROGRAM_SEED.length) return;
-    const version = typeof PROGRAM_SEED_VERSION === "undefined" ? 1 : PROGRAM_SEED_VERSION;
-    let seededVersion = await DB.kvGet("programSeedVersion", null);
-    if (seededVersion == null) {
-      // Pre-versioning installs only carried a boolean "programSeeded" flag.
-      seededVersion = (await DB.kvGet("programSeeded", false)) ? 1 : 0;
-    }
-    if (seededVersion >= version) return;
-    const hasOldSeed = state.routines.some((r) => String(r.id).startsWith("seed-"));
-    if (seededVersion > 0 && !hasOldSeed) {
-      // Was seeded before but the person deleted the program — respect that.
-      await DB.kvSet("programSeedVersion", version);
-      return;
-    }
-    if (seededVersion === 0 && state.routines.length > 0 && !hasOldSeed) {
-      // Never seeded, but they already built their own routines — don't intrude.
-      await DB.kvSet("programSeedVersion", version);
-      return;
-    }
-    const seeded = PROGRAM_SEED.map((r) => ({
-      id: r.id,
-      name: r.name,
-      exercises: r.exercises.map((e) => ({
-        exerciseId: e.exerciseId,
-        note: e.note || "",
-        sets: e.sets.map((s) => ({
-          weight: s.weight === "" || s.weight == null ? "" : s.weight,
-          reps: s.reps === "" || s.reps == null ? "" : s.reps,
-          isWarmup: !!s.isWarmup,
-        })),
-      })),
-    }));
-    // Drop every old seeded routine (including ones whose ids aren't reused),
-    // then write the new program in.
-    const oldSeeds = state.routines.filter((r) => String(r.id).startsWith("seed-"));
-    await Promise.all(oldSeeds.map((r) => DB.delete("routines", r.id)));
+  // The 16-week program (program-plan.js / program-seed.js) was retired on
+  // 2026-10-19 in favour of auto-suggested weekly workouts (see
+  // suggestedWeek()). One-time cleanup: drop the plan's seed-* routines and
+  // its settings. Workout history, PRs and the user's own routines are kept.
+  async function removeLegacyProgram() {
+    if (await DB.kvGet("legacyProgramRemoved", false)) return;
+    const seeds = state.routines.filter((r) => String(r.id).startsWith("seed-"));
+    await Promise.all(seeds.map((r) => DB.delete("routines", r.id)));
     state.routines = state.routines.filter((r) => !String(r.id).startsWith("seed-"));
-    await Promise.all(seeded.map((r) => DB.put("routines", r)));
-    state.routines = [...seeded, ...state.routines];
-    await DB.kvSet("programSeedVersion", version);
-    await DB.kvSet("programSeeded", true);
+    delete state.settings.programStartDate;
+    delete state.settings.programAdjustments;
+    await DB.kvSet("settings", state.settings);
+    await DB.kvSet("legacyProgramRemoved", true);
   }
 
   function saveSettings() { DB.kvSet("settings", state.settings); }
@@ -677,558 +635,6 @@
     saveSettings();
   }
 
-  // ---------- Program tracking + coach engine ----------
-  // Everything here keys off program-plan.js (the full 16-week cycle) plus
-  // the person's logged workouts. The coach never changes loads silently:
-  // rule hits become suggestions with an explicit Apply button, which write
-  // into settings.programAdjustments and re-sync the seeded routines.
-
-  function programState() {
-    const startDate = state.settings.programStartDate;
-    if (!startDate || typeof PROGRAM_PLAN === "undefined") return null;
-    const week = planWeekNumber(startDate);
-    if (week == null || week < 1) return null;
-    const clamped = Math.min(week, PROGRAM_PLAN.totalWeeks);
-    return {
-      startDate,
-      week,
-      clamped,
-      post: week > PROGRAM_PLAN.totalWeeks,
-      row: planWeekRow(clamped),
-      weekStartMs: planWeekStartMs(startDate, week),
-      weekEndMs: planWeekEndMs(startDate, week),
-      // The calendar decides what TODAY actually is (training day, rest, off)
-      // rather than a fixed weekday map, so a week can be reshaped without
-      // touching the loading table.
-      day: planDayFor(startDate, Date.now()),
-      dateRange: planWeekDateRangeText(startDate, clamped),
-    };
-  }
-
-  // Rewrites the plan-driven main lifts inside the seeded routines to this
-  // week's targets (sets × reps × load + note). Runs on every launch and
-  // after an Apply — idempotent, and never touches accessories, user-created
-  // routines, or any workout history.
-  async function syncSeedRoutinesToPlan() {
-    const ps = programState();
-    if (!ps || ps.post) return;
-    const targets = planRoutineTargets(ps.clamped, state.settings.programAdjustments);
-    for (const r of state.routines) {
-      const t = targets[r.id];
-      if (!t) continue;
-      let changed = false;
-      for (const ex of r.exercises) {
-        const spec = t[ex.exerciseId];
-        if (!spec) continue;
-        delete t[ex.exerciseId]; // only the first matching exercise per routine takes the target
-        // Accessories carry their load over (double progression lives in the
-        // logged weight, not the sheet) — only sets and reps get rewritten.
-        const carried = ex.sets.filter((s) => !s.isWarmup).map((s) => s.weight);
-        const lastKnown = carried.length ? carried[carried.length - 1] : "";
-        const newSets = spec.sets.map((s, i) => ({
-          weight: spec.keepWeight ? (carried[i] !== undefined ? carried[i] : lastKnown) : s.weight,
-          reps: s.reps,
-          isWarmup: false,
-        }));
-        if (ex.note !== spec.note || JSON.stringify(ex.sets) !== JSON.stringify(newSets)) {
-          ex.note = spec.note;
-          ex.sets = newSets;
-          changed = true;
-        }
-      }
-      if (changed) await DB.put("routines", r);
-    }
-  }
-
-  function liftKeyExerciseId(liftKey) { return liftKey === "bench" ? "barbell-bench-press" : "squat"; }
-  function liftKeyName(liftKey) { return liftKey === "bench" ? "Bench" : "Squat"; }
-
-  // Best-e1RM-per-session series for a lift since the cycle started, oldest
-  // first. When an RPE was logged on the set, reps-in-reserve get folded into
-  // the Epley estimate (a capped RPE-8.5 triple is NOT a true 3RM — treating
-  // it as one would make every on-program week read as a strength loss).
-  // Effective reps capped at 12 to keep the formula in its reliable range and
-  // keep pump work from polluting the strength trend.
-  function cycleE1rmSeries(liftKey) {
-    const ps = programState();
-    if (!ps) return [];
-    const exId = liftKeyExerciseId(liftKey);
-    const startMs = planWeekStartMs(ps.startDate, 1);
-    const pts = [];
-    for (const w of state.workouts) { // newest first
-      if (new Date(w.date).getTime() < startMs) continue;
-      const e = w.exercises.find((x) => x.exerciseId === exId);
-      if (!e) continue;
-      let best = 0;
-      for (const s of e.sets) {
-        if (!s.completed || s.isWarmup || !(s.weight > 0) || !((s.reps || 0) > 0) || s.reps > 10) continue;
-        const rir = s.type === "failure" ? 0 : (typeof s.rpe === "number" && s.rpe > 0 ? Math.max(0, 10 - s.rpe) : 0);
-        const effReps = Math.min(12, s.reps + rir);
-        best = Math.max(best, estOneRm(s.weight, effReps));
-      }
-      if (best > 0) pts.push({ date: w.date, value: best, week: planWeekNumber(ps.startDate, new Date(w.date).getTime()) });
-    }
-    return pts.reverse();
-  }
-
-  // Where a lift stands vs. its week-16 goal band. The pace line is anchored
-  // to the lifter's OWN first logged e1RM of the cycle (not the sheet's 1RM
-  // input) — e1RM from capped training sets systematically under-reads a true
-  // max, so comparing training-e1RM against training-e1RM-plus-required-gain
-  // is the honest like-for-like. Current = best of the last 28 days, so a
-  // deload dip doesn't erase it.
-  function liftTrajectory(liftKey) {
-    const ps = programState();
-    if (!ps) return null;
-    const goal = PROGRAM_PLAN.goals[liftKey];
-    const base = PROGRAM_PLAN.oneRm[liftKey];
-    const series = cycleE1rmSeries(liftKey);
-    if (!series.length) return { liftKey, base, goal, current: null };
-    const cutoff = Date.now() - 28 * 86400000;
-    let current = 0;
-    for (const p of series) {
-      if (new Date(p.date).getTime() >= cutoff) current = Math.max(current, p.value);
-    }
-    if (!current) current = series[series.length - 1].value;
-    // Anchor: best e1RM across the first two logged program weeks.
-    const firstWeek = series[0].week;
-    let anchor = 0;
-    for (const p of series) if (p.week <= firstWeek + 1) anchor = Math.max(anchor, p.value);
-    const goalMid = (goal.lo + goal.hi) / 2;
-    const requiredGain = goalMid - base; // e.g. bench +10, squat ≈ 0
-    const weeksTotal = Math.max(1, PROGRAM_PLAN.totalWeeks - firstWeek);
-    const frac = Math.min(1, Math.max(0, (ps.clamped - firstWeek) / weeksTotal));
-    const expected = anchor + Math.max(0, requiredGain) * frac;
-    const delta = current - expected;
-    let status = delta >= 5 ? "ahead" : delta >= -7.5 ? "on-pace" : "behind";
-    // Deload and re-express weeks run submax doubles at half the volume — e1RM
-    // under-reads there by design, so don't call that "behind".
-    if (status === "behind" && ["Deload", "Re-express"].includes(ps.row.block)) status = "on-pace";
-    if (series.length < 3) status = "building"; // too little data to judge pace
-    let projected = null;
-    if (series.length >= 2) {
-      const first = series[0], last = series[series.length - 1];
-      const spanDays = (new Date(last.date) - new Date(first.date)) / 86400000;
-      if (spanDays >= 14) {
-        const slope = (last.value - first.value) / spanDays;
-        const testMs = planWeekStartMs(ps.startDate, PROGRAM_PLAN.totalWeeks) + 3.5 * 86400000;
-        const daysLeft = Math.max(0, (testMs - Date.now()) / 86400000);
-        projected = Math.max(current, Math.min(current + slope * daysLeft, current * 1.06));
-      }
-    }
-    return { liftKey, base, goal, current, anchor, expected, delta, status, projected };
-  }
-
-  // Recent comp-lift sessions (the Sunday bench primer / Monday squat primer),
-  // newest first, each with the plan's target for the week it was logged in.
-  function recentMainLiftSessions(liftKey, limit = 6) {
-    const ps = programState();
-    if (!ps) return [];
-    const exId = liftKeyExerciseId(liftKey);
-    const compRoutine = liftKey === "bench" ? "seed-sun-upper-power" : "seed-mon-lower-power";
-    const out = [];
-    for (const w of state.workouts) { // newest first
-      const e = w.exercises.find((x) => x.exerciseId === exId);
-      if (!e) continue;
-      const working = e.sets.filter((s) => s.completed && !s.isWarmup && s.weight > 0);
-      if (!working.length) continue;
-      const top = working.reduce((a, b) => ((b.weight || 0) > (a.weight || 0) ? b : a));
-      const wkNum = planWeekNumber(ps.startDate, new Date(w.date).getTime());
-      if (wkNum == null || wkNum < 1) continue;
-      const planTop = planTopSetFor(Math.min(wkNum, PROGRAM_PLAN.totalWeeks), liftKey, state.settings.programAdjustments);
-      const isComp = w.routineId === compRoutine || top.weight >= planTop.load * 0.9;
-      if (!isComp) continue;
-      out.push({ workout: w, week: wkNum, top, planTop });
-      if (out.length >= limit) break;
-    }
-    return out;
-  }
-
-  // This-program-week adherence + arm-volume stats for the coach panel.
-  function coachWeekStats() {
-    const ps = programState();
-    if (!ps || ps.post) return null;
-    const weekStart = ps.weekStartMs;
-    const weekEnd = ps.weekEndMs;
-    const days = new Set();
-    let biceps = 0, triceps = 0;
-    for (const w of state.workouts) {
-      const t = new Date(w.date).getTime();
-      if (t < weekStart || t >= weekEnd) continue;
-      days.add(new Date(w.date).toISOString().slice(0, 10));
-      for (const e of w.exercises) {
-        const ex = exerciseById(e.exerciseId);
-        if (!ex) continue;
-        const working = e.sets.filter((s) => s.completed && !s.isWarmup).length;
-        if (ex.muscle === "Biceps") biceps += working;
-        else if (ex.muscle === "Triceps") triceps += working;
-      }
-    }
-    const required = planRequiredSessions(ps.clamped, ps.startDate);
-    const weekLen = planWeekLength(ps.clamped);
-    const dayIndex = Math.min(weekLen - 1, Math.max(0, Math.floor((Date.now() - weekStart) / 86400000)));
-    // Fraction of the week elapsed — the adherence flag can't key off "day 4"
-    // any more now that a week can run 6, 8 or 15 days.
-    const weekProgress = weekLen <= 1 ? 1 : dayIndex / (weekLen - 1);
-    const arm = PROGRAM_PLAN.armSets;
-    // armScale is set per week in program-plan.js (0.5 on every tier-D week:
-    // the three deloads and the re-express week).
-    const scale = typeof ps.row.armScale === "number"
-      ? ps.row.armScale
-      : (ps.row.block === "Deload" ? 0.5 : 1);
-    return {
-      sessionsDone: days.size,
-      sessionsRequired: required,
-      dayOfWeek: dayIndex,
-      weekProgress,
-      weekLen,
-      trimmed: ps.row.tier === "D",
-      biceps: { done: biceps, lo: Math.round(arm.biceps[0] * scale), hi: Math.round(arm.biceps[1] * scale) },
-      triceps: { done: triceps, lo: Math.round(arm.triceps[0] * scale), hi: Math.round(arm.triceps[1] * scale) },
-    };
-  }
-
-  // "4×3 @ 270" (+ back-off segments) from a target set list.
-  function summarizeSets(sets) {
-    if (!sets || !sets.length) return "";
-    const segs = [];
-    for (const s of sets) {
-      const last = segs[segs.length - 1];
-      if (last && last.weight === s.weight && last.reps === s.reps) last.n++;
-      else segs.push({ n: 1, weight: s.weight, reps: s.reps });
-    }
-    return segs.map((g) => `${g.n}×${g.reps} @ ${g.weight}`).join(" + ");
-  }
-
-  // The coach's read on where things stand: rule checks from the program
-  // sheet (RPE cap beats the % ladder, two-over-cap fatigue pull, Wed
-  // pressing auto-drop), block-transition heads-ups, and adherence flags.
-  // Ordered most-actionable first.
-  function coachInsights() {
-    const ps = programState();
-    if (!ps) return [];
-    if (ps.post) {
-      return [{ kind: "info", title: "Cycle complete", body: `Week ${PROGRAM_PLAN.totalWeeks} has passed — log your test-day maxes, then run the 6–8 week arm block before the next strength cycle.` }];
-    }
-    const insights = [];
-    const adjustments = state.settings.programAdjustments || {};
-    const row = ps.row;
-
-    // Per-lift RPE-cap / progression checks on the latest comp session.
-    const allComp = [];
-    for (const liftKey of ["bench", "squat"]) {
-      const sessions = recentMainLiftSessions(liftKey);
-      sessions.forEach((s) => allComp.push({ ...s, liftKey }));
-      if (!sessions.length) continue;
-      const last = sessions[0];
-      const name = liftKeyName(liftKey);
-      const loggedRpe = typeof last.top.rpe === "number" ? last.top.rpe : (last.top.type === "failure" ? 10 : null);
-      const cap = last.planTop.rpeCap;
-      if (loggedRpe != null && loggedRpe > cap) {
-        const targetWeek = Math.min(last.week + 1, PROGRAM_PLAN.totalWeeks);
-        const nextPlan = planTopSetFor(targetWeek, liftKey, adjustments);
-        if (nextPlan.load > last.top.weight && !(adjustments[String(targetWeek)] || {})[liftKey]) {
-          insights.push({
-            kind: "suggest",
-            title: `${name}: repeat ${last.top.weight} lb next week`,
-            body: `Top set ${last.top.weight}×${last.top.reps} came in at RPE ${loggedRpe} — over the ≤ ${cap} cap. The cap beats the % ladder: repeat the load instead of jumping to ${nextPlan.load}.`,
-            apply: { week: targetWeek, set: { [liftKey]: last.top.weight } },
-            applyLabel: `Set wk ${targetWeek} to ${last.top.weight}`,
-          });
-        }
-      } else if (loggedRpe != null && loggedRpe <= cap - 1 && !["Deload", "Re-express"].includes(row.block)) {
-        const nxt = last.week < PROGRAM_PLAN.totalWeeks ? planTopSetFor(last.week + 1, liftKey, adjustments) : null;
-        insights.push({
-          kind: "good",
-          title: `${name} moving well`,
-          body: `Top set at RPE ${loggedRpe}, a full point under the ${cap} cap${nxt && nxt.load > last.top.weight ? ` — green light for the programmed jump to ${nxt.load}` : ""}.`,
-        });
-      }
-    }
-
-    // Fatigue rule: the two most recent comp sessions (either lift) both over cap.
-    if (allComp.length >= 2) {
-      allComp.sort((a, b) => new Date(b.workout.date) - new Date(a.workout.date));
-      const lastTwo = allComp.slice(0, 2);
-      const bothOver = lastTwo.every((s) => typeof s.top.rpe === "number" && s.top.rpe > s.planTop.rpeCap);
-      const targetWeek = Math.min(ps.clamped + 1, PROGRAM_PLAN.totalWeeks);
-      if (bothOver && !(adjustments[String(targetWeek)] || {}).scale) {
-        insights.push({
-          kind: "warn",
-          title: "Two sessions in a row over target RPE",
-          body: "The sheet's fatigue rule: pull next week's loads 5% and let recovery catch up. Losing a small step now beats grinding into a stall.",
-          apply: { week: targetWeek, set: { scale: 0.95 } },
-          applyLabel: `Pull wk ${targetWeek} loads 5%`,
-        });
-      }
-    }
-
-    // Wed pressing auto-drop check (this program week).
-    const weekEnd = ps.weekEndMs;
-    const wed = state.workouts.find((w) => {
-      const t = new Date(w.date).getTime();
-      return w.routineId === "seed-wed-upper-push" && t >= ps.weekStartMs && t < weekEnd;
-    });
-    if (wed) {
-      let topRpe = null;
-      for (const e of wed.exercises) {
-        if (!["close-grip-bench-press", "incline-barbell-bench-press"].includes(e.exerciseId)) continue;
-        for (const s of e.sets) {
-          if (s.completed && !s.isWarmup && typeof s.rpe === "number") topRpe = Math.max(topRpe ?? 0, s.rpe);
-        }
-      }
-      if (topRpe != null && topRpe > row.rpeCap + 1) {
-        insights.push({
-          kind: "warn",
-          title: "Wed pressing ran heavy — auto-drop rule",
-          body: `Pressing hit RPE ${topRpe} (target +1 over). Drop Friday's triceps finisher and take a set off the lateral raises — keep the pulling. Flagged again next week → cut direct triceps volume ~20% for the rest of the block.`,
-        });
-      }
-    }
-
-    // Day-specific calendar notes (rest days carry their own coaching line).
-    if (ps.day && ps.day.kind === "rest" && ps.day.note) {
-      insights.push({ kind: "info", title: `Today: ${ps.day.label}`, body: ps.day.note });
-    }
-    if (ps.clamped === 1) {
-      insights.push({
-        kind: "info",
-        title: "New cycle — Powerbuilding v4.0",
-        body: "Sixteen weeks, five days, upper body and quads. Every bench and squat day opens with a heavy primer before the volume work — that single top set is what holds your 1RM while the rest of the session grows you. Week 1's job is learning the new lifts, not loading them: get the groove, log honest accessory weights, and let block B do the damage.",
-      });
-    }
-    if (ps.clamped === 4 || ps.clamped === 9) {
-      insights.push({
-        kind: "info",
-        title: `Bench 1RM checkpoint — ${planWeekRow(ps.clamped).bench.load}×${planWeekRow(ps.clamped).bench.reps} at RPE ≤ 8`,
-        body: "The bench input is still the conservative 315 because the RPE of the August paused single was never recorded. Log the RPE on today's primer: if it moves at 8 or under, the real max is higher and every load in the cycle is running light. This is the cheap way to settle it without a max attempt.",
-      });
-    }
-    if (planWeekRow(ps.clamped).tier === "B" && ps.clamped === 6) {
-      insights.push({
-        kind: "info",
-        title: "Block B — highest volume of the cycle",
-        body: "Accessory sets step up across the board and stay there for four weeks. Rotate at most ONE exercise per muscle now, and only if it stalled or a joint complained in block A — everything else keeps its double-progression history. If sleep or appetite starts sliding, hold loads instead of adding.",
-      });
-    }
-    if (ps.clamped === 11) {
-      insights.push({
-        kind: "info",
-        title: "Block C — the primer becomes the main event",
-        body: "Three to four heavy sets per comp lift instead of one, RPE cap up to 8.5, accessory sets down about 20%. Rest 3–4 minutes between primer sets; these are strength sets, not a circuit. This is the block where the size you built in A and B shows up as bar weight.",
-      });
-    }
-    if (ps.clamped === 16) {
-      insights.push({
-        kind: "warn",
-        title: "Re-express week — this is not a max",
-        body: `One double per lift at 95% (${PROGRAM_PLAN.reExpress.bench} bench, ${PROGRAM_PLAN.reExpress.squat} squat), capped at RPE 8. Stop the set the moment bar speed drops. Log the RPE — it sets the 1RM inputs for the next cycle, and a double at a known RPE is a better estimate than a grinding single.`,
-      });
-    }
-    // Standing constraint, every week of the cycle.
-    if (PROGRAM_PLAN.rules.hinge) {
-      insights.push({
-        kind: "info",
-        title: "Back-safe by design — no hinge, no unsupported rows",
-        body: "Lower back is still listed active, so this program has no deadlift, RDL, good morning or bent-over barbell row anywhere in it. Thursday's hinge is a hip thrust at RPE ≤ 7, every row is chest-supported, and core is anti-rotation only. Tell me the back is cleared and the hinge slot opens back up.",
-      });
-    }
-
-    // Block-transition heads-up for next week.
-    if (ps.clamped < PROGRAM_PLAN.totalWeeks) {
-      const next = planWeekRow(ps.clamped + 1);
-      if (next.block !== row.block) {
-        const COPY = {
-          Deload: `Deload next week — ${next.bench.load}/${next.squat.load} straight sets at RPE ≤ 6, no primers, half the accessory sets, no PRs. It is not a make-up week. This is where the last block turns into muscle.`,
-          Hypertrophy: "Accumulation block next week — accessory volume steps up and the primer stays a single heavy top set. Growth comes from the back-offs; the primer just keeps the 1RM honest.",
-          Strength: "Intensification next week — the primer becomes three to four heavy sets, the RPE cap goes to 8.5, and accessory sets come down about 20%. Nothing gets deleted, it gets re-weighted.",
-          "Re-express": `Re-express week next — one double per lift at 95% (${PROGRAM_PLAN.reExpress.bench} / ${PROGRAM_PLAN.reExpress.squat}), RPE cap 8, then light back-offs. Not a max attempt: log the RPE and it sets the next cycle's inputs.`,
-        };
-        if (COPY[next.block]) insights.push({ kind: "info", title: `${next.block} — week ${ps.clamped + 1}`, body: COPY[next.block] });
-      }
-    }
-
-    // Adherence flag once the week is mostly gone.
-    const stats = coachWeekStats();
-    const lateInWeek = stats && stats.weekProgress >= 0.6;
-    if (stats && lateInWeek && row.block !== "Deload" && stats.sessionsDone < stats.sessionsRequired - 1) {
-      insights.push({
-        kind: "warn",
-        title: `${stats.sessionsDone} of ${stats.sessionsRequired} sessions logged this week`,
-        body: "If life got in the way, prioritize the two comp days — they carry the cycle. The accessory work is what you drop, not the barbell work.",
-      });
-    }
-    if (stats && !stats.trimmed && lateInWeek && stats.biceps.done < stats.biceps.lo) {
-      insights.push({
-        kind: "info",
-        title: `Biceps at ${stats.biceps.done} of ${stats.biceps.lo}–${stats.biceps.hi} weekly sets`,
-        body: "Arm volume is guaranteed Sun/Wed/Thu in this program — don't leave the curls to a Friday that may not happen.",
-      });
-    }
-
-    // RPE logging is what powers the cap checks.
-    if (!state.settings.showRpe) {
-      insights.push({
-        kind: "info",
-        title: "Turn on RPE logging",
-        body: "Settings → Workout → Log RPE per set. The coach's cap checks, repeat-the-load calls, and fatigue rule all run off your logged top-set RPE.",
-      });
-    }
-
-    const order = { suggest: 0, warn: 1, good: 2, info: 3 };
-    return insights.sort((a, b) => order[a.kind] - order[b.kind]);
-  }
-
-  function applyCoachSuggestion(week, set) {
-    const adjustments = state.settings.programAdjustments || (state.settings.programAdjustments = {});
-    adjustments[String(week)] = { ...(adjustments[String(week)] || {}), ...set };
-    saveSettings();
-    syncSeedRoutinesToPlan();
-    showToast("Applied — routine targets updated");
-    render();
-  }
-
-  const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-  // Home "This week" program card: week/block, today's session + main-lift
-  // target, cycle progress, and the single most actionable coach insight.
-  function renderProgramCardHtml() {
-    const ps = programState();
-    if (!ps) return "";
-    if (ps.post) {
-      return `
-        <div class="card card-tap" data-action="go-analytics">
-          <div style="font-weight:700;">Cycle complete 🎉</div>
-          <div class="small muted" style="margin-top:4px;">${PROGRAM_PLAN.totalWeeks} weeks done. Log your test maxes, then run the 6–8 wk arm block before the next cycle.</div>
-        </div>`;
-    }
-    const row = ps.row;
-    const today = new Date().getDay();
-    // The calendar decides what today is — a week override can move sessions
-    // off their usual weekdays. v4 uses plain Sun–Sat weeks, so today is just
-    // the weekday map unless a week is given an explicit `days` override.
-    const day = ps.day;
-    let todayHtml;
-    if (day && day.routineId) {
-      const targets = planRoutineTargets(ps.clamped, state.settings.programAdjustments);
-      const ids = [day.routineId, day.extraRoutineId].filter(Boolean);
-      const lines = ids.map((rid) => {
-        const t = targets[rid] || {};
-        const firstId = Object.keys(t).find((k) => !t[k].keepWeight) || Object.keys(t)[0];
-        const main = firstId ? t[firstId] : null;
-        const mainEx = firstId ? exerciseById(firstId) : null;
-        return main && mainEx
-          ? `<div class="small muted" style="margin-top:2px;">${escapeHtml(mainEx.name)} ${summarizeSets(main.sets)}${` · RPE ≤ ${row.rpeCap}`}</div>`
-          : "";
-      }).join("");
-      todayHtml = `
-        <div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · ${escapeHtml(day.label)}</div>
-        ${lines}
-        ${day.note ? `<div class="tiny muted" style="margin-top:4px;">${escapeHtml(day.note)}</div>` : ""}`;
-    } else if (day) {
-      const COPY = {
-        off: "No lifting. Walk, eat, sleep — this is the part of the program that grows you.",
-        travel: "Travel day. Nothing to log.",
-        rest: "Recovery is part of the program. Eat, sleep, walk.",
-      };
-      todayHtml = `<div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · ${escapeHtml(day.label)}</div>
-        <div class="small muted" style="margin-top:2px;">${escapeHtml(day.note || COPY[day.kind] || COPY.rest)}</div>`;
-    } else {
-      todayHtml = `<div style="font-weight:700; margin-top:2px;">${DOW_NAMES[today]} · Rest day</div>
-        <div class="small muted" style="margin-top:2px;">Recovery is part of the program. Eat, sleep, walk.</div>`;
-    }
-    const headline = coachInsights().find((i) => i.kind !== "info");
-    const pct = Math.round((ps.clamped / PROGRAM_PLAN.totalWeeks) * 100);
-    return `
-      <div class="section">
-        <div class="row" style="margin-bottom:8px;">
-          <h3 style="margin:0;">Program</h3>
-          <span class="badge badge-accent">Wk ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} · ${row.block}</span>
-        </div>
-        <div class="tiny muted" style="margin:-4px 0 8px;">${escapeHtml(ps.dateRange)}</div>
-        <div class="card card-tap" data-action="go-analytics">
-          <div class="muscle-vol-track" style="margin-bottom:10px;"><span class="muscle-vol-fill" style="width:${pct}%"></span></div>
-          ${todayHtml}
-          ${row.note ? `<div class="tiny muted" style="margin-top:6px;">${escapeHtml(row.note)}</div>` : ""}
-          ${headline ? `
-            <div class="suggest-card" style="margin-top:10px; margin-bottom:0;">
-              <span class="suggest-icon">${headline.kind === "good" ? "▲" : headline.kind === "warn" ? "!" : "→"}</span>
-              <div><div class="suggest-title">${escapeHtml(headline.title)}</div><div class="tiny muted">${escapeHtml(headline.body)}</div></div>
-            </div>` : ""}
-        </div>
-      </div>
-    `;
-  }
-
-  // The full coach panel on Analytics: goal trajectory vs the week-16 bands,
-  // this week's adherence, and every insight (with Apply where offered).
-  function renderCoachSectionHtml() {
-    const ps = programState();
-    if (!ps) return "";
-    const insights = coachInsights();
-    const stats = coachWeekStats();
-    const STATUS_LABELS = { "ahead": "Ahead of pace", "on-pace": "On pace", "behind": "Behind pace", "building": "Building data" };
-    const STATUS_BADGE = { "ahead": "badge-success", "on-pace": "badge-success", "behind": "badge-effort", "building": "" };
-    const goalRows = ps.post ? "" : ["bench", "squat"].map((liftKey) => {
-      const tr = liftTrajectory(liftKey);
-      if (!tr) return "";
-      const goalTxt = `${tr.goal.lo}–${tr.goal.hi}`;
-      if (tr.current == null) {
-        return `
-          <div class="row" style="padding:6px 0;">
-            <div><div class="row-title">${liftKeyName(liftKey)}</div><div class="tiny muted">Goal ${goalTxt} lb · log comp sessions to track pace</div></div>
-            <span class="badge badge-muted">No data yet</span>
-          </div>`;
-      }
-      return `
-        <div class="row" style="padding:6px 0; align-items:flex-start;">
-          <div>
-            <div class="row-title">${liftKeyName(liftKey)} · e1RM ${Math.round(tr.current)}</div>
-            <div class="tiny muted">Goal ${goalTxt} by wk ${PROGRAM_PLAN.totalWeeks} (from ${tr.base})${tr.projected ? ` · projecting ≈ ${Math.round(tr.projected)}` : ""}</div>
-          </div>
-          <span class="badge ${STATUS_BADGE[tr.status]}">${STATUS_LABELS[tr.status]}</span>
-        </div>`;
-    }).join("");
-
-    return `
-      <div class="section">
-        <div class="row" style="margin-bottom:8px;">
-          <h3 style="margin:0;">Coach</h3>
-          <span class="badge badge-accent">Wk ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} · ${ps.row.block}</span>
-        </div>
-        ${goalRows ? `<div class="card">${goalRows}<div class="tiny muted" style="margin-top:6px;">Estimated 1RM from your best recent comp sets (Epley, RPE-adjusted), vs. a straight-line pace from your first logged cycle sessions to the week-16 goal gain. Deload/peak dips are expected and not scored against you.</div></div>` : ""}
-        ${stats ? `
-          <div class="card">
-            <div class="muscle-vol-row">
-              <span class="muscle-vol-name">Sessions</span>
-              <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.sessionsDone / stats.sessionsRequired))}%"></span></span>
-              <span class="muscle-vol-count">${stats.sessionsDone} of ${stats.sessionsRequired}</span>
-            </div>
-            <div class="muscle-vol-row">
-              <span class="muscle-vol-name">Biceps</span>
-              <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.biceps.done / stats.biceps.hi))}%"></span></span>
-              <span class="muscle-vol-count">${stats.biceps.done} of ${stats.biceps.lo}–${stats.biceps.hi}</span>
-            </div>
-            <div class="muscle-vol-row">
-              <span class="muscle-vol-name">Triceps</span>
-              <span class="muscle-vol-track"><span class="muscle-vol-fill" style="width:${Math.min(100, Math.round(100 * stats.triceps.done / stats.triceps.hi))}%"></span></span>
-              <span class="muscle-vol-count">${stats.triceps.done} of ${stats.triceps.lo}–${stats.triceps.hi}</span>
-            </div>
-            <div class="tiny muted" style="margin-top:6px;">Sessions and weekly arm sets, program week ${ps.clamped} (${escapeHtml(ps.dateRange)})${stats.trimmed ? " · peak week — arm volume is intentionally trimmed" : ""}${ps.row.block === "Deload" ? " · deload — arm targets halved, and the trip is the rest of it" : ""}.</div>
-          </div>` : ""}
-        ${insights.map((i) => `
-          <div class="suggest-card ${i.kind === "good" ? "" : "suggest-hold"}">
-            <span class="suggest-icon">${i.kind === "good" ? "▲" : i.kind === "warn" ? "!" : i.kind === "suggest" ? "↺" : "→"}</span>
-            <div style="flex:1; min-width:0;">
-              <div class="suggest-title">${escapeHtml(i.title)}</div>
-              <div class="tiny muted">${escapeHtml(i.body)}</div>
-              ${i.apply ? `<button class="btn btn-sm btn-accent" style="margin-top:8px;" data-action="coach-apply" data-week="${i.apply.week}" data-set="${encodeURIComponent(JSON.stringify(i.apply.set))}">${escapeHtml(i.applyLabel || "Apply")}</button>` : ""}
-            </div>
-          </div>`).join("")}
-      </div>
-    `;
-  }
-
   // ---------- Effort scoring ----------
   // Every completed workout gets a 0-100 "effort score" built from hard
   // sets: each working set contributes based mostly on how close it was to
@@ -1484,11 +890,20 @@
     return { p: COARSE_TO_FINE[ex.muscle] || [], s: [], t: [], L: false };
   }
 
-  function programRules() {
-    return typeof PROGRAM_PLAN !== "undefined" && PROGRAM_PLAN.rules ? PROGRAM_PLAN.rules : {};
-  }
+  // Standing training constraints, carried over from the retired program at
+  // Alex's request (2026-10-19: "keep all of them"). Both the coach and the
+  // suggested-workout generator honour these.
+  const TRAINING_RULES = {
+    hinge: "Lower back ACTIVE. No conventional deadlift, RDL, good morning, bent-over barbell row or unsupported loaded hinge. The hinge slot is a hip thrust at RPE <= 7. Every row is chest-supported. Core is anti-flexion / anti-rotation only.",
+    squatVolume: "Squat back-offs never exceed 4 sets of 5 (his body does not tolerate more). Extra quad stimulus comes from leg press or hack squat, never the barbell squat.",
+    shoulder: "Right shoulder subacromial pain pattern: Alex modifies delt and pressing slots himself. Shoulder-friendly versions: scapular-plane raises, cables and machines over heavy dumbbells.",
+    perSession: "No muscle gets more than ~10-11 hard sets in one session.",
+  };
+  function programRules() { return TRAINING_RULES; }
+  // The deload state now comes from the suggested-week engine (a planned
+  // easy week every 5th week), not a program calendar.
   function currentBlock() {
-    try { const ps = programState(); return ps && !ps.post ? ps.row.block : null; } catch (e) { return null; }
+    try { const sw = suggestedWeek(); return sw && sw.deload ? "Deload" : null; } catch (e) { return null; }
   }
 
   function workingSets(e) { return e.sets.filter((s) => s.completed && !s.isWarmup && (s.reps || 0) > 0); }
@@ -1699,7 +1114,7 @@
 
     // 6) Stalls — e1RM flat across the last 3 sessions vs. before (8 weeks).
     if (!easyWeek) {
-      const programLifts = currentBlock() ? ["squat", "barbell-bench-press"] : [];
+      const programLifts = [];
       const series = {};
       for (const w of workoutsWithin(56, now).slice().reverse()) for (const e of w.exercises) {
         if (programLifts.includes(e.exerciseId)) continue;
@@ -1758,6 +1173,375 @@
       </div>`;
   }
 
+  // ===== Suggested weekly workouts (replaces the 16-week program) =====
+  // Every week the app writes a fresh powerbuilding plan from your own
+  // history, using the same research rules as the coach:
+  //  • Days/week = what you've actually been training (median of the last
+  //    8 weeks, 3–6).
+  //  • Squat + bench twice a week each: one heavy day (top triple ~87% e1RM
+  //    + back-offs) and one volume day — strength responds to frequency and
+  //    heavy exposure (Pelland 2024; Lopez 2021). Squat back-offs never go
+  //    past 4×5 (TRAINING_RULES.squatVolume).
+  //  • Accessories fill each muscle to its weekly fractional-set target
+  //    (Pelland 2024), ramping up gradually from what you've been doing,
+  //    split across ≥2 days and capped ~11 sets per muscle per session
+  //    (Remmert 2025), covering the movement types each muscle needs
+  //    (overhead triceps, knee extension, seated curls, laterals…).
+  //  • Exercises you already do are preferred, so loads progress by double
+  //    progression from your last session; new picks start blank.
+  //  • Hinges, unsupported rows and loaded spinal flexion are never picked
+  //    while TRAINING_RULES.hinge stands.
+  //  • After 4 straight hard weeks the next week is a deload (half sets,
+  //    mains ~65%, RPE ≤ 6).
+  // The plan is built from history BEFORE this week's Monday, so it stays
+  // put while you train through the week; finished days get ticked off.
+  const SUGGEST_GROUPS = {
+    lower: ["quads", "hamstrings", "glutes", "calves", "abs"],
+    upper: ["chest", "lats", "upperBack", "frontDelts", "sideDelts", "rearDelts", "biceps", "triceps"],
+    push: ["chest", "frontDelts", "sideDelts", "triceps"],
+    pull: ["lats", "upperBack", "rearDelts", "biceps", "abs"],
+    arms: ["lats", "upperBack", "rearDelts", "biceps", "triceps", "sideDelts"],
+    full: ["quads", "hamstrings", "glutes", "chest", "lats", "upperBack", "sideDelts", "rearDelts", "biceps", "triceps", "calves", "abs"],
+  };
+  const SUGGEST_SPLITS = {
+    3: { name: "full-body", days: [
+      { key: "A", label: "Full body A", main: { squat: "heavy", bench: "volume" }, group: "full" },
+      { key: "B", label: "Full body B", main: { bench: "heavy" }, group: "full" },
+      { key: "C", label: "Full body C", main: { squat: "volume" }, group: "full" },
+    ] },
+    4: { name: "upper/lower", days: [
+      { key: "LA", label: "Lower A · heavy squat", main: { squat: "heavy" }, group: "lower" },
+      { key: "UA", label: "Upper A · heavy bench", main: { bench: "heavy" }, group: "upper" },
+      { key: "LB", label: "Lower B · squat volume", main: { squat: "volume" }, group: "lower" },
+      { key: "UB", label: "Upper B · bench volume", main: { bench: "volume" }, group: "upper" },
+    ] },
+    5: { name: "powerbuilding", days: [
+      { key: "LA", label: "Lower A · heavy squat", main: { squat: "heavy" }, group: "lower" },
+      { key: "UA", label: "Upper A · heavy bench", main: { bench: "heavy" }, group: "upper" },
+      { key: "PA", label: "Pull + arms", main: {}, group: "arms" },
+      { key: "LB", label: "Lower B · squat volume", main: { squat: "volume" }, group: "lower" },
+      { key: "UB", label: "Upper B · bench volume", main: { bench: "volume" }, group: "upper" },
+    ] },
+    6: { name: "push/pull/legs", days: [
+      { key: "PU1", label: "Push A · heavy bench", main: { bench: "heavy" }, group: "push" },
+      { key: "PL1", label: "Pull A", main: {}, group: "pull" },
+      { key: "LG1", label: "Legs A · heavy squat", main: { squat: "heavy" }, group: "lower" },
+      { key: "PU2", label: "Push B · bench volume", main: { bench: "volume" }, group: "push" },
+      { key: "PL2", label: "Pull B", main: {}, group: "pull" },
+      { key: "LG2", label: "Legs B · squat volume", main: { squat: "volume" }, group: "lower" },
+    ] },
+  };
+  const MAIN_LIFT_IDS = { squat: "squat", bench: "barbell-bench-press" };
+  // Movement types each muscle should cover over the week, in priority order.
+  const SUGGEST_TYPES = {
+    quads: ["quads:squat", "quads:knee-ext"], hamstrings: ["hams:knee-flex", "hams:hinge"], glutes: ["glutes:hip-ext"],
+    chest: ["chest:press", "chest:fly"], lats: ["back:vertical"], upperBack: ["back:horizontal"],
+    sideDelts: ["delts:lateral"], rearDelts: ["delts:rear"], frontDelts: ["delts:overhead"],
+    triceps: ["triceps:overhead", "triceps:extension"], biceps: ["biceps:stretch", "biceps:curl"],
+    calves: ["calves:straight", "calves:bent"], abs: ["abs:anti", "abs:flexion"],
+  };
+  // Fallback picks (in order) when you've never done anything of that type.
+  const SUGGEST_DEFAULTS = {
+    "quads:squat": ["leg-press", "hack-squat", "belt-squat"], "quads:knee-ext": ["leg-extension"],
+    "hams:knee-flex": ["seated-leg-curl", "leg-curl"], "hams:hinge": ["romanian-deadlift"], "glutes:hip-ext": ["hip-thrust", "bulgarian-split-squat"],
+    "chest:press": ["incline-dumbbell-press", "machine-chest-press", "dumbbell-bench-press"], "chest:fly": ["cable-crossover", "pec-deck-fly", "dumbbell-fly"],
+    "back:vertical": ["lat-pulldown", "pull-up"], "back:horizontal": ["chest-supported-row", "seated-cable-row", "machine-row"],
+    "delts:lateral": ["cable-lateral-raise", "lateral-raise"], "delts:rear": ["reverse-pec-deck", "face-pull"], "delts:overhead": ["machine-shoulder-press", "seated-dumbbell-press"],
+    "triceps:overhead": ["overhead-cable-extension", "overhead-triceps-extension"], "triceps:extension": ["rope-pushdown", "triceps-pushdown"],
+    "biceps:stretch": ["incline-dumbbell-curl", "preacher-curl"], "biceps:curl": ["cable-curl", "dumbbell-curl", "hammer-curl"],
+    "calves:straight": ["calf-raise", "leg-press-calf-raise"], "calves:bent": ["seated-calf-raise"],
+    "abs:anti": ["pallof-press", "dead-bug", "plank"], "abs:flexion": ["cable-crunch"],
+  };
+  const SUGGEST_ORDER = ["quads", "hamstrings", "glutes", "chest", "upperBack", "lats", "sideDelts", "rearDelts", "triceps", "biceps", "calves", "abs", "frontDelts"];
+  // Exercises the back rule rules out (hinges, unsupported rows, loaded flexion).
+  const HINGE_BLOCKED = new Set(["deadlift", "sumo-deadlift", "deficit-deadlift", "rack-pull", "trap-bar-deadlift", "romanian-deadlift", "good-morning",
+    "hyperextension", "barbell-row", "pendlay-row", "t-bar-row", "kettlebell-swing", "power-clean", "clean-and-jerk", "snatch", "thruster",
+    "sit-up", "decline-sit-up", "crunch", "bicycle-crunch", "v-up", "cable-crunch", "weighted-crunch-machine", "russian-twist", "hanging-leg-raise", "toes-to-bar", "mountain-climber"]);
+
+  function exerciseAllowed(id) {
+    if (TRAINING_RULES.hinge && HINGE_BLOCKED.has(id)) return false;
+    return true;
+  }
+
+  function mondayOf(ms) {
+    const d = new Date(ms); const day = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - day); d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  }
+  function roundLoad(lb, step = 5) { return lb > 0 ? Math.max(step, Math.round(lb / step) * step) : ""; }
+
+  // Recent best e1RM (RPE-adjusted when RPE was logged), last 8 weeks before `before`.
+  function recentE1rm(exerciseId, before, weeks = 8) {
+    let best = 0;
+    for (const w of state.workouts) {
+      const t = new Date(w.date).getTime();
+      if (t >= before || t < before - weeks * 7 * 86400000) continue;
+      for (const e of w.exercises) {
+        if (e.exerciseId !== exerciseId) continue;
+        for (const s of workingSets(e)) {
+          if (!(s.weight > 0) || s.reps > 12) continue;
+          const rir = s.type === "failure" ? 0 : (typeof s.rpe === "number" && s.rpe > 0 ? Math.max(0, 10 - s.rpe) : 0);
+          best = Math.max(best, estOneRm(s.weight, Math.min(12, s.reps + rir)));
+        }
+      }
+    }
+    return best || bestE1rmAllTime(exerciseId);
+  }
+
+  // Double progression: last session's working sets → next target load.
+  function nextLoadFor(ex, repHi, before) {
+    let last = null;
+    for (const w of state.workouts) {
+      if (new Date(w.date).getTime() >= before) continue;
+      const e = w.exercises.find((x) => x.exerciseId === ex.id);
+      if (e && workingSets(e).length) { last = workingSets(e); break; }
+    }
+    if (!last) return { weight: "", note: "New pick — start with a weight you could do for ~2 more reps." };
+    const top = Math.max(...last.map((s) => s.weight || 0));
+    if (!(top > 0)) return { weight: "", note: "" };
+    const atTop = last.filter((s) => (s.weight || 0) === top).every((s) => s.reps >= repHi);
+    const d = difficultyInfo(ex);
+    const inc = ex.equipment === "Bodyweight" ? 0 : d && d.parts && d.parts.m === 3 ? 10 : 5;
+    return atTop && inc
+      ? { weight: top + inc, note: `Hit ${repHi}s last time — up ${inc} lb.` }
+      : { weight: top, note: `Same weight as last time; beat your reps.` };
+  }
+
+  let _suggestMemo = null;
+  function suggestedWeek(nowMs = Date.now()) {
+    const weekStart = mondayOf(nowMs);
+    const prior = state.workouts.filter((w) => new Date(w.date).getTime() < weekStart);
+    const memoKey = weekStart + ":" + prior.length + ":" + (prior[0] ? prior[0].id : "");
+    if (_suggestMemo && _suggestMemo.key === memoKey) return _suggestMemo.value;
+
+    // --- days per week: median sessions/week over the last 8 weeks with any training
+    const counts = [];
+    for (let k = 1; k <= 8; k++) {
+      const a = weekStart - k * 7 * 86400000, b = a + 7 * 86400000;
+      const days = new Set(prior.filter((w) => { const t = new Date(w.date).getTime(); return t >= a && t < b; }).map((w) => new Date(w.date).toDateString()));
+      if (days.size) counts.push(days.size);
+    }
+    counts.sort((x, y) => x - y);
+    const median = counts.length ? counts[Math.floor((counts.length - 1) / 2)] : 4;
+    const nDays = Math.max(3, Math.min(6, Math.round(counts.length >= 2 ? median : 4)));
+    const split = SUGGEST_SPLITS[nDays];
+
+    // --- deload: 4+ consecutive hard weeks right before this one
+    const weekSets = [];
+    for (let k = 1; k <= 8; k++) {
+      const a = weekStart - k * 7 * 86400000, b = a + 7 * 86400000;
+      weekSets.push(prior.filter((w) => { const t = new Date(w.date).getTime(); return t >= a && t < b; })
+        .reduce((n, w) => n + w.exercises.reduce((m, e) => m + workingSets(e).length, 0), 0));
+    }
+    const avgSets = weekSets.filter((x) => x > 0).reduce((a, b) => a + b, 0) / Math.max(1, weekSets.filter((x) => x > 0).length);
+    let hardStreak = 0;
+    for (const n of weekSets) { if (n > 0 && n >= 0.6 * avgSets) hardStreak++; else break; }
+    const deload = hardStreak >= 4;
+
+    // --- historical weekly volume per muscle (last 4 weeks before Monday)
+    const last4 = prior.filter((w) => new Date(w.date).getTime() >= weekStart - 28 * 86400000);
+    const histWeeks = last4.length ? Math.max(1, Math.min(4, (weekStart - Math.min(...last4.map((w) => new Date(w.date).getTime()))) / (7 * 86400000))) : 1;
+    const hist = fractionalVolume(last4).total;
+    const usage = {};
+    for (const w of prior.filter((w) => new Date(w.date).getTime() >= weekStart - 84 * 86400000)) for (const e of w.exercises) {
+      if (workingSets(e).length) usage[e.exerciseId] = (usage[e.exerciseId] || 0) + 1;
+    }
+
+    const days = split.days.map((d) => ({ ...d, exercises: [], load: {} }));
+    const addLoad = (day, ex, sets) => {
+      const mm = exerciseMuscles(ex);
+      mm.p.forEach((m) => { day.load[m] = (day.load[m] || 0) + sets; });
+      mm.s.forEach((m) => { if (!mm.p.includes(m)) day.load[m] = (day.load[m] || 0) + sets * 0.5; });
+    };
+    const scale = deload ? 0.5 : 1;
+
+    // --- main lifts
+    const e1rm = {};
+    for (const [lift, id] of Object.entries(MAIN_LIFT_IDS)) e1rm[lift] = recentE1rm(id, weekStart);
+    for (const day of days) {
+      for (const [lift, role] of Object.entries(day.main)) {
+        const ex = exerciseById(MAIN_LIFT_IDS[lift]);
+        const base = e1rm[lift];
+        const w = (pct) => (base > 0 ? roundLoad(base * pct) : "");
+        let sets, note;
+        if (deload) {
+          sets = Array.from({ length: 3 }, () => ({ weight: w(0.65), reps: 5 }));
+          note = "Deload: 3×5 @ ~65%, RPE ≤ 6. Smooth reps, nothing to prove.";
+        } else if (role === "heavy") {
+          sets = [{ weight: w(0.87), reps: 3 }, ...Array.from({ length: lift === "squat" ? 3 : 3 }, () => ({ weight: w(lift === "squat" ? 0.76 : 0.78), reps: 5 }))];
+          note = `Top triple ~87% (RPE 8), then back-offs at RPE 7–8.${base > 0 ? ` Based on e1RM ${Math.round(base)}.` : ""}`;
+        } else {
+          const n = lift === "squat" ? 4 : 4;
+          sets = Array.from({ length: n }, () => ({ weight: w(lift === "squat" ? 0.72 : 0.72), reps: lift === "squat" ? 5 : 6 }));
+          note = lift === "squat" ? "Volume day: 4×5 is the cap. Add quad work on machines, not more squats." : "Volume day: 4×6 at RPE 7–8, last set can go to 8.5.";
+        }
+        day.exercises.push({ exerciseId: ex.id, sets, note, kind: "main", reason: deload ? "Deload: keep the groove, shed fatigue" : role === "heavy" ? "Heavy exposure for strength" : "Second weekly exposure (frequency)" });
+        addLoad(day, ex, sets.length);
+      }
+    }
+
+    // --- accessory targets + allocation
+    const targets = {};
+    for (const m of SUGGEST_ORDER) {
+      const [lo, hi] = MUSCLE_TARGETS[m];
+      const h = (hist[m] || 0) / histWeeks;
+      const aimBase = Math.round(lo + (hi - lo) * 0.35);
+      let aim = h < lo ? Math.max(lo, Math.min(aimBase, h + 6)) : Math.min(hi, Math.max(aimBase, Math.round(h)));
+      if (m === "frontDelts") aim = lo;
+      targets[m] = { aim: aim * scale, hist: h };
+    }
+    const weekLoad = () => {
+      const t = {};
+      for (const d of days) for (const [m, v] of Object.entries(d.load)) t[m] = (t[m] || 0) + v;
+      return t;
+    };
+    const pickExercise = (muscle, type, day) => {
+      const used = new Set(day.exercises.map((e) => e.exerciseId));
+      const cands = DEFAULT_EXERCISES.filter((e) => {
+        const mm = EXERCISE_MUSCLES[e.id];
+        return mm && mm.p.includes(muscle) && mm.t.includes(type) && exerciseAllowed(e.id) && !used.has(e.id) && !Object.values(MAIN_LIFT_IDS).includes(e.id);
+      });
+      if (!cands.length) return null;
+      const defs = SUGGEST_DEFAULTS[type] || [];
+      cands.sort((a, b) => ((usage[b.id] || 0) - (usage[a.id] || 0))
+        || ((defs.indexOf(a.id) === -1 ? 99 : defs.indexOf(a.id)) - (defs.indexOf(b.id) === -1 ? 99 : defs.indexOf(b.id))));
+      return cands[0];
+    };
+    for (const m of SUGGEST_ORDER) {
+      const mDays = days.filter((d) => SUGGEST_GROUPS[d.group].includes(m));
+      if (!mDays.length) continue;
+      let remaining = targets[m].aim - (weekLoad()[m] || 0);
+      if (remaining < 1.5) continue;
+      const types = (SUGGEST_TYPES[m] || []).filter((t) => !(TRAINING_RULES.hinge && (t === "hams:hinge" || t === "abs:flexion")));
+      const useDays = mDays.slice(0, Math.max(1, Math.min(mDays.length, remaining >= 5 ? 3 : 1)));
+      let ti = 0;
+      for (let di = 0; di < useDays.length && remaining >= 1.5; di++) {
+        const day = useDays[di];
+        let chunk = Math.ceil(remaining / (useDays.length - di));
+        chunk = Math.min(chunk, Math.floor(COACH_SESSION_CAP - (day.load[m] || 0)));
+        if (chunk < 2) continue;
+        const nEx = chunk >= 6 && types.length > 1 ? 2 : 1;
+        for (let k = 0; k < nEx; k++) {
+          const type = types[(ti++) % Math.max(1, types.length)];
+          const ex = type && pickExercise(m, type, day);
+          if (!ex) continue;
+          const sets = Math.max(2, Math.min(4, Math.round(chunk / nEx)));
+          const d = difficultyInfo(ex);
+          const compound = d && d.parts ? d.parts.m >= 2 : false;
+          const [rLo, rHi] = m === "quads" && compound ? [8, 12] : compound ? [6, 10] : [10, 15];
+          const ld = nextLoadFor(ex, rHi, weekStart);
+          const reason = (targets[m].hist < MUSCLE_TARGETS[m][0] ? `${MUSCLE_LABELS[m]} ${targets[m].hist.toFixed(0)} → ${Math.round(targets[m].aim)} sets/wk` : `${MUSCLE_LABELS[m]} volume`)
+            + (type && /overhead|knee-ext|knee-flex|lateral|stretch|fly|rear|bent/.test(type) && !usage[ex.id] ? " · covers a neglected movement" : "");
+          day.exercises.push({
+            exerciseId: ex.id, kind: compound ? "compound" : "isolation",
+            sets: Array.from({ length: Math.max(1, Math.round(sets * (deload ? 1 : 1))) }, () => ({ weight: ld.weight, reps: rHi })),
+            repRange: [rLo, rHi],
+            note: `${rLo}–${rHi} reps, last set ${deload ? "RPE ≤ 6" : "0–2 reps in reserve"}. ${ld.note}`.trim(),
+            reason,
+          });
+          addLoad(day, ex, sets);
+          remaining -= sets;
+        }
+      }
+      // Leftover pass: top up this muscle's picks a set at a time (max 5
+      // sets per exercise, never past the per-session cap) until the weekly
+      // target is met.
+      let guard = 0;
+      while (remaining >= 1 && guard++ < 12) {
+        let bumped = false;
+        for (const day of useDays) {
+          if (remaining < 1) break;
+          const e = day.exercises.find((x) => x.kind !== "main" && exerciseMuscles(exerciseById(x.exerciseId)).p[0] === m && x.sets.length < 5);
+          if (!e || (day.load[m] || 0) + 1 > COACH_SESSION_CAP) continue;
+          e.sets.push({ ...e.sets[e.sets.length - 1] });
+          addLoad(day, exerciseById(e.exerciseId), 1);
+          remaining -= 1; bumped = true;
+        }
+        if (!bumped) break;
+      }
+    }
+    // order: mains, compounds (by difficulty), isolation
+    const rank = { main: 0, compound: 1, isolation: 2 };
+    for (const d of days) d.exercises.sort((a, b) => rank[a.kind] - rank[b.kind] || (difficultyInfo(exerciseById(b.exerciseId)).points - difficultyInfo(exerciseById(a.exerciseId)).points));
+
+    const value = {
+      weekStart, weekKey: new Date(weekStart).toISOString().slice(0, 10), splitName: split.name, deload, hardStreak,
+      e1rm, targets, days, basedOnWeeks: counts.length,
+    };
+    _suggestMemo = { key: memoKey, value };
+    return value;
+  }
+
+  function suggestionRoutineId(sw, day) { return `sugg:${sw.weekKey}:${day.key}`; }
+  function suggestedDayDone(sw, day) {
+    const id = suggestionRoutineId(sw, day);
+    return state.workouts.some((w) => w.routineId === id);
+  }
+  function suggestedDayAsRoutine(sw, day) {
+    return {
+      id: suggestionRoutineId(sw, day),
+      name: day.label,
+      exercises: day.exercises.map((e) => ({ exerciseId: e.exerciseId, note: e.note, sets: e.sets.map((s) => ({ weight: s.weight, reps: s.reps, isWarmup: false })) })),
+    };
+  }
+
+  function renderSuggestedWeekHtml() {
+    if (!state.workouts.length) return "";
+    const sw = suggestedWeek();
+    const nextIdx = sw.days.findIndex((d) => !suggestedDayDone(sw, d));
+    const fmtSets = (e) => {
+      const g = [];
+      for (const s of e.sets) { const l = g[g.length - 1]; if (l && l.w === s.weight && l.r === s.reps) l.n++; else g.push({ n: 1, w: s.weight, r: s.reps }); }
+      return g.map((x) => `${x.n}×${x.r}${x.w !== "" ? ` @ ${weightToDisplay(x.w)}` : ""}`).join(" + ");
+    };
+    return `
+      <div class="section">
+        <div class="row" style="margin-bottom:8px;">
+          <h3 style="margin:0;">This week's plan</h3>
+          <span class="badge ${sw.deload ? "badge-muted" : "badge-accent"}">${sw.days.length}-day ${escapeHtml(sw.splitName)}${sw.deload ? " · deload" : ""}</span>
+        </div>
+        <div class="tiny muted" style="margin:-4px 0 8px;">Built from your last ${sw.basedOnWeeks || "few"} weeks: what you've done, what each muscle needs, and what's been neglected. Updates every Monday.</div>
+        ${sw.days.map((d, i) => {
+          const done = suggestedDayDone(sw, d);
+          const main = d.exercises.filter((e) => e.kind === "main").map((e) => `${escapeHtml(exerciseById(e.exerciseId).name)} ${fmtSets(e)}`).join(" · ");
+          const nSets = d.exercises.reduce((n, e) => n + e.sets.length, 0);
+          return `
+          <div class="card card-tap" data-action="open-suggested" data-key="${d.key}" ${i === nextIdx ? `style="border-color:var(--accent);"` : ""}>
+            <div class="row">
+              <div style="min-width:0;">
+                <div style="font-weight:700;">${escapeHtml(d.label)}${done ? ` <span class="badge badge-success" style="margin-left:4px; vertical-align:2px;">Done</span>` : i === nextIdx ? ` <span class="badge badge-accent" style="margin-left:4px; vertical-align:2px;">Next</span>` : ""}</div>
+                <div class="small muted">${main || `${d.exercises.length} exercises`} · ${nSets} sets</div>
+              </div>
+              <button class="btn btn-sm ${done ? "" : "btn-accent"}" data-action="start-suggested" data-key="${d.key}">${done ? "Again" : "Start"}</button>
+            </div>
+          </div>`;
+        }).join("")}
+      </div>`;
+  }
+
+  function renderSuggestedDay(params) {
+    const sw = suggestedWeek();
+    const d = sw.days.find((x) => x.key === params.key);
+    if (!d) { navigate("home"); return; }
+    appEl.innerHTML = `
+      <div class="topbar"><button class="back-btn" data-action="back">‹ Back</button></div>
+      <h1>${escapeHtml(d.label)}</h1>
+      <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">Suggested for the week of ${fmtDate(new Date(sw.weekStart).toISOString())}${sw.deload ? " · deload week" : ""}</div>
+      ${d.exercises.map((e) => {
+        const ex = exerciseById(e.exerciseId);
+        return `
+        <div class="exercise-block">
+          <div class="ex-title">${tierChipHtml(ex)} ${escapeHtml(ex.name)}</div>
+          <div class="small" style="margin:4px 0;">${e.sets.length} × ${e.repRange ? `${e.repRange[0]}–${e.repRange[1]}` : e.sets.map((s) => s.reps).join("/")}${e.sets[0] && e.sets[0].weight !== "" ? ` @ ${[...new Set(e.sets.map((s) => weightToDisplay(s.weight)))].join(" / ")} ${unitLabel()}` : ""}</div>
+          <div class="tiny muted">${escapeHtml(e.note || "")}</div>
+          ${e.reason ? `<div class="coach-cite">${escapeHtml(e.reason)}</div>` : ""}
+        </div>`;
+      }).join("")}
+      <button class="btn btn-primary" style="margin-top:12px;" data-action="start-suggested" data-key="${d.key}">Start this workout</button>
+      <button class="btn" style="margin-top:8px;" data-action="save-suggested" data-key="${d.key}">Save as routine</button>
+    `;
+  }
+
   // ===== Ask Claude (copy-paste hand-off, no API) =====
   function askClaudeButtonHtml() {
     return `
@@ -1771,16 +1555,13 @@
     const L = [];
     const bw = bodyWeightOn();
     const h = state.settings.heightIn;
-    const ps = (() => { try { return programState(); } catch (e) { return null; } })();
     L.push("I track my lifting in my app (Just Lift). Act as my strength and hypertrophy coach. Using the data below and current evidence-based training research, tell me:");
     L.push("1) what's going well, 2) what I'm under- or over-doing per muscle, 3) whether I'm pushing hard enough, 4) exercises I'm neglecting, and 5) exactly what to change next week. Respect my program constraints listed below.");
     L.push("");
     L.push("## Me");
     L.push(`- Male${bw ? `, ${Math.round(bw)} lb` : ""}${h ? `, ${Math.floor(h / 12)}'${Math.round(h % 12)}"` : ""}`);
-    if (ps && !ps.post) {
-      L.push(`- Program: week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks}, ${ps.row.block} block, RPE cap ${ps.row.rpeCap} (${ps.dateRange})`);
-      if (PROGRAM_PLAN.oneRm) L.push(`- 1RM inputs: ${Object.entries(PROGRAM_PLAN.oneRm).map(([k, v]) => `${k} ${v}`).join(", ")}`);
-    }
+    const sw = (() => { try { return suggestedWeek(); } catch (e) { return null; } })();
+    if (sw) L.push(`- Plan: app-suggested ${sw.days.length}-day ${sw.splitName} week${sw.deload ? " (deload week)" : ""}; e1RMs used: ${Object.entries(sw.e1rm).map(([k, v]) => `${k} ${Math.round(v)}`).join(", ")}`);
     const r = programRules();
     const cons = ["hinge", "squatVolume", "shoulder", "perSession"].filter((k) => r[k]);
     if (cons.length) { L.push("- Constraints:"); cons.forEach((k) => L.push(`  - ${k}: ${r[k]}`)); }
@@ -2281,6 +2062,7 @@
       case "workout-detail": renderWorkoutDetail(params); break;
       case "workout-complete": renderWorkoutComplete(params); break;
       case "exercise-detail": renderExerciseDetail(params); break;
+      case "suggested-day": renderSuggestedDay(params); break;
       default: renderHome(); break;
     }
 
@@ -2369,33 +2151,9 @@
     `;
   }
 
-  // Home's routine list in training-week order (Sun → Mon → Wed → Thu → Fri
-  // for the seeded program, matching the split) with today's session bubbled
-  // to the top — the list used to render in arbitrary DB order, which buried
-  // the day's actual workout mid-list. User-created routines keep their
-  // original order after the seeded ones.
+  // Home's routine list: the user's own routines in their saved order.
   function orderedHomeRoutines() {
-    const seedOrder = typeof PLAN_DAYS !== "undefined" ? PLAN_DAYS.map((d) => d.routineId) : [];
-    // Today's session comes from the calendar (which honors any week
-    // shift), falling back to the plain weekday map if program tracking is off.
-    const ps = programState();
-    let todayIds = [];
-    if (ps && ps.day) {
-      todayIds = [ps.day.routineId, ps.day.extraRoutineId].filter(Boolean);
-    } else if (typeof PLAN_DAYS !== "undefined") {
-      const todayDow = new Date().getDay();
-      const info = PLAN_DAYS.find((d) => d.dow === todayDow);
-      if (info) todayIds = [info.routineId];
-    }
-    const entries = state.routines.map((routine, i) => ({ routine, i, isToday: todayIds.includes(routine.id) }));
-    entries.sort((a, b) => {
-      if (a.isToday !== b.isToday) return a.isToday ? -1 : 1;
-      const ai = seedOrder.indexOf(a.routine.id), bi = seedOrder.indexOf(b.routine.id);
-      if (ai !== -1 && bi !== -1) return ai - bi;
-      if (ai !== -1) return -1;
-      if (bi !== -1) return 1;
-      return a.i - b.i;
-    });
+    const entries = state.routines.map((routine, i) => ({ routine, i, isToday: false }));
     return entries;
   }
 
@@ -2415,7 +2173,7 @@
           </div>
         </div>` : ""}
 
-      ${renderProgramCardHtml()}
+      ${renderSuggestedWeekHtml()}
       ${renderTrainingCoachHtml({ title: "Coach says", limit: 2, more: true })}
 
       <button class="btn btn-primary" data-action="start-empty" style="margin-bottom:16px;">+ Start empty workout</button>
@@ -2803,7 +2561,6 @@
     if (state.workouts.length === 0) {
       appEl.innerHTML = `
         <div class="topbar"><h1>Analytics</h1></div>
-        ${renderCoachSectionHtml()}
         ${emptyStateHtml("No data yet", "Finish a few workouts and your progress and stimulus analytics will build up here.", "workouts")}
       `;
       return;
@@ -2842,8 +2599,6 @@
         <div class="stat-card"><div class="stat-label">Avg effort</div><div class="stat-value">${avgEffort != null ? avgEffort + "%" : "–"}</div></div>
         <div class="stat-card"><div class="stat-label">PRs · 4wk</div><div class="stat-value">${prs28}</div></div>
       </div>
-
-      ${renderCoachSectionHtml()}
 
       ${renderTrainingCoachHtml({ askClaude: true, alwaysShow: true })}
 
@@ -3315,46 +3070,6 @@
           <div class="tiny muted" style="margin-top:8px;">Adjusts effort for range of motion — taller lifters move the weight farther per rep (±0.5% per inch from 5'8"): fully on squats, deadlifts, lunges and cleans, 60% on presses, rows and pull-ups. Isolation exercises aren't affected. Leaving this blank skips the adjustment entirely.</div>
         </div>
       </div>
-
-      ${(() => {
-        const ps = programState();
-        const adj = s.programAdjustments || {};
-        const adjWeeks = Object.keys(adj);
-        return `
-      <div class="section">
-        <h3>Program</h3>
-        <div class="card">
-          <div class="row">
-            <span>Cycle start (day 1)</span>
-            <input type="date" data-action="set-program-start" value="${s.programStartDate || ""}"
-              style="border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 8px; background:var(--surface); font-weight:700;" />
-          </div>
-          <div class="tiny muted" style="margin-top:8px;">
-            ${ps ? (ps.post
-              ? "The 16-week cycle is complete. Feed week 16's re-express doubles into the 1RM inputs and start the next block."
-              : `Currently week ${ps.clamped} of ${PROGRAM_PLAN.totalWeeks} (${ps.row.block}) · ${escapeHtml(ps.dateRange)}. Targets in the seeded routines update automatically each week — shift this date by ±7 days to repeat or skip a week. Powerbuilding v4.0: week 1 is a compressed six-day start (days 1–5 straight, Mon Sep 21 – Fri Sep 25), then plain Sun–Sat weeks with five required sessions (Sun/Mon/Wed/Thu/Fri). Deloads in weeks 5, 10 and 15; week 16 is a re-express double, not a max test. Squat 1RM input is ${PROGRAM_PLAN.oneRm.squat} and bench ${PROGRAM_PLAN.oneRm.bench}.`)
-              : "Set the day your cycle started to turn on program tracking and the coach. Clearing it turns both off."}
-          </div>
-          ${ps && !ps.post ? `
-          <div style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
-            <div class="small" style="font-weight:700; margin-bottom:6px;">This week${planCalendarRow(ps.clamped).label ? ` · ${escapeHtml(planCalendarRow(ps.clamped).label)}` : ""}</div>
-            ${planWeekDays(ps.startDate, ps.clamped).map((d) => {
-              const isToday = ps.day && d.dateMs === ps.day.dateMs;
-              const dateTxt = new Date(d.dateMs).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-              return `<div class="row" style="padding:3px 0;">
-                <span class="tiny ${isToday ? "" : "muted"}" style="${isToday ? "font-weight:700;" : ""}">${escapeHtml(dateTxt)}</span>
-                <span class="tiny ${d.routineId ? "" : "muted"}" style="${isToday ? "font-weight:700;" : ""}">${escapeHtml(d.label)}${d.required ? "" : d.routineId ? " (bonus)" : ""}</span>
-              </div>`;
-            }).join("")}
-          </div>` : ""}
-          ${adjWeeks.length ? `
-          <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
-            <span class="small">Applied adjustments: wk ${adjWeeks.join(", wk ")}</span>
-            <button class="btn btn-sm" data-action="clear-program-adjustments">Clear</button>
-          </div>` : ""}
-        </div>
-      </div>`;
-      })()}
 
       <div class="section">
         <h3>Workout</h3>
@@ -4023,19 +3738,24 @@
       case "complete-done": navigate("home"); break;
       case "go-analytics": navigate("analytics"); break;
       case "ask-claude": copyClaudeExport(); break;
-      case "coach-apply": {
-        let set = null;
-        try { set = JSON.parse(decodeURIComponent(t.dataset.set)); } catch (err) { break; }
-        applyCoachSuggestion(parseInt(t.dataset.week, 10), set);
+      case "open-suggested": navigate("suggested-day", { key: t.dataset.key }); break;
+      case "start-suggested": {
+        const sw = suggestedWeek();
+        const d = sw.days.find((x) => x.key === t.dataset.key);
+        if (d) startWorkout(suggestedDayAsRoutine(sw, d));
         break;
       }
-      case "clear-program-adjustments":
-        state.settings.programAdjustments = {};
-        saveSettings();
-        syncSeedRoutinesToPlan();
-        showToast("Adjustments cleared");
-        render();
+      case "save-suggested": {
+        const sw = suggestedWeek();
+        const d = sw.days.find((x) => x.key === t.dataset.key);
+        if (d) {
+          const r = { ...suggestedDayAsRoutine(sw, d), id: uid(), name: d.label };
+          state.routines.push(r);
+          DB.put("routines", r);
+          showToast("Saved to your routines");
+        }
         break;
+      }
       case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
       case "history-tab": navigate("history", { tab: t.dataset.tab }); break;
@@ -4207,14 +3927,7 @@
       const file = t.files[0];
       t.value = ""; // reset so re-selecting the same file still fires change
       importData(file);
-    } else if (t.dataset.action === "set-program-start") {
-      // Committed on change (date pickers fire change, not per-keystroke input).
-      state.settings.programStartDate = t.value || null;
-      saveSettings();
-      syncSeedRoutinesToPlan();
-      showToast(t.value ? "Program start updated" : "Program tracking off");
-      render();
-    } else if (t.dataset.action === "set-bodyweight") {
+        } else if (t.dataset.action === "set-bodyweight") {
       // Log a dated bodyweight entry on commit (blur/enter), not per keystroke.
       if (t.value === "") return;
       const lb = weightFromDisplay(t.value);
