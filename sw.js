@@ -1,4 +1,4 @@
-const CACHE = "lift-v20";
+const CACHE = "lift-v21";
 const ASSETS = [
   "./",
   "./index.html",
@@ -8,8 +8,6 @@ const ASSETS = [
   "./exercises-data.js",
   "./exercise-standards.js",
   "./muscle-map.js",
-  "./program-seed.js",
-  "./program-plan.js",
   "./manifest.json",
 ];
 
