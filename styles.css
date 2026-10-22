@@ -42,6 +42,18 @@
   --warmup: #ffb454;
   --warmup-bg: rgba(255, 180, 84, 0.14);
 
+  /* Hero-card palette — reference: The Outsiders (App Store id6751584800)
+     uses one saturated jewel-tone gradient per metric "hero" card (magenta
+     readiness, green load-ratio, violet sleep) on a near-black base, with
+     an oversized numeral as the card's whole point. Ported as a pattern,
+     not copied asset-for-asset: our hero reuses the app's own zone colors
+     (success/warmup/danger/accent below) plus one new magenta-violet pair
+     for the effort/readiness-style card, which had no existing analog. */
+  --pink: #ff3fb0;
+  --pink-2: #a855f7;
+  --pink-bg: rgba(255, 63, 176, 0.16);
+  --hero-radius: 24px;
+
   /* Progress-chart palette — brightened teal/orange pair, kept distinct
      from --accent so the chart still reads as its own "brand moment":
      teal always means weight (the y-axis), orange always means time
@@ -56,6 +68,11 @@
   --fs-xs: 13px;
   --fs-base: 16px;
   --fs-lg: 20px;
+  /* --fs-hero: the one deliberate 5th size, scoped to hero-card numerals
+     only (see .hero-num) — everywhere else the 4-size scale above still
+     holds. Mirrors the oversized-numeral treatment observed on every
+     hero card in the Outsiders reference. */
+  --fs-hero: 52px;
   --fw-medium: 500;
   --fw-bold: 700;
 
@@ -247,6 +264,67 @@ h3 { font-size: var(--fs-xs); font-weight: var(--fw-bold); margin: 0 0 8px; colo
 .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-card); }
 .stat-label { font-size: var(--fs-2xs); color: var(--text-2); font-weight: var(--fw-medium); margin-bottom: 4px; }
 .stat-value { font-size: var(--fs-lg); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
+
+/* ============================================================
+   Hero card — the single big-numeral metric card pattern observed
+   across every screen of the Outsiders reference (Today/readiness,
+   Training Load Ratio, Sleep): a saturated gradient surface, one
+   oversized value, a short label, and an optional sparkline bled
+   into the bottom edge. Zone variants reuse this app's existing
+   success/warmup/danger/accent semantics so color still means the
+   same thing it does everywhere else in Just Lift.
+   ============================================================ */
+.hero-card {
+  position: relative;
+  border-radius: var(--hero-radius);
+  padding: 20px 20px 16px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  color: #fff;
+  box-shadow: var(--shadow-card);
+  isolation: isolate;
+}
+.hero-card::before {
+  content: "";
+  position: absolute; inset: 0;
+  background: radial-gradient(120% 90% at 100% 0%, rgba(255, 255, 255, 0.16), transparent 60%);
+  pointer-events: none;
+}
+.hero-card-label {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  color: rgba(255, 255, 255, 0.78);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+.hero-card-num {
+  font-size: var(--fs-hero);
+  font-weight: var(--fw-bold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.hero-card-num .hero-card-unit { font-size: var(--fs-lg); font-weight: var(--fw-bold); opacity: 0.8; margin-left: 2px; }
+.hero-card-sub { font-size: var(--fs-xs); color: rgba(255, 255, 255, 0.82); margin-top: 4px; max-width: 70%; }
+.hero-card-spark { margin: 10px -4px -4px; opacity: 0.95; }
+.hero-card-spark svg { display: block; width: 100%; height: auto; }
+
+/* Zone/metric fills — dark base deepening into one vivid hue at the
+   top-right, matching the reference's corner-weighted gradient glow. */
+.hero-card-pink   { background: linear-gradient(135deg, #2a0f24 0%, #7a1f63 45%, var(--pink) 100%); }
+.hero-card-optimal{ background: linear-gradient(135deg, #0c231b 0%, #0f5132 45%, var(--success) 100%); }
+.hero-card-pushing{ background: linear-gradient(135deg, #2a1d0a 0%, #7a4e0f 45%, var(--warmup) 100%); }
+.hero-card-spike  { background: linear-gradient(135deg, #2a0c10 0%, #7a1620 45%, var(--danger) 100%); }
+.hero-card-easing { background: linear-gradient(135deg, #0d1026 0%, #272e6e 45%, var(--accent) 100%); }
+
+/* Compact 2-up metric tiles below a hero card — the reference's Body
+   Metrics grid: a colored dot, a small label, a tabular-numeral value. */
+.metric-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
+.metric-tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
+.metric-tile-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; }
+.metric-tile-label { font-size: var(--fs-2xs); color: var(--text-2); font-weight: var(--fw-medium); }
+.metric-tile-value { font-size: var(--fs-lg); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; margin-top: 2px; }
 
 .btn {
   display: inline-flex;
@@ -1488,6 +1566,15 @@ input[type="number"] {
 }
 .az-stats .stat-card { margin-bottom: 0; }
 .stat-unit { font-size: var(--fs-2xs); font-weight: var(--fw-medium); color: var(--text-2); }
+/* One stat tile gets the hero treatment (avg effort — this app's closest
+   analog to the reference's "Today readiness" number) so the grid isn't
+   four identical boxes. */
+.stat-card-pink {
+  background: linear-gradient(135deg, #2a0f24 0%, #7a1f63 60%, var(--pink) 130%);
+  border-color: transparent;
+}
+.stat-card-pink .stat-label { color: rgba(255, 255, 255, 0.78); }
+.stat-card-pink .stat-value { color: #fff; }
 
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 
@@ -1579,13 +1666,29 @@ input[type="number"] {
   border: 1px solid var(--border);
 }
 .cal-cell.cal-empty { background: transparent; border: none; }
+/* Dot-grid treatment (reference: the Outsiders' Progress/Training Summary
+   screen) — a day cell shows a dot sized and tinted by that day's logged
+   volume instead of a flat filled square, so a month reads as a density
+   map at a glance. Tiers come from dayVolumeTier() in app.js. */
 .cal-cell.cal-active {
-  background: linear-gradient(135deg, #7982e0, var(--accent));
-  color: #fff;
-  font-weight: var(--fw-bold);
+  background: transparent;
+  color: var(--text-2);
+  font-weight: var(--fw-medium);
   border-color: transparent;
 }
-.cal-cell.cal-today { box-shadow: 0 0 0 2px var(--chart-time); }
+.cal-cell.cal-active::before {
+  content: "";
+  position: absolute;
+  width: 60%; height: 60%;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.cal-cell { position: relative; }
+.cal-cell.cal-active span { position: relative; z-index: 1; color: #fff; font-weight: var(--fw-bold); font-size: 9px; }
+.cal-cell.cal-active.tier-light::before { background: rgba(94, 106, 210, 0.38); width: 46%; height: 46%; }
+.cal-cell.cal-active.tier-medium::before { background: rgba(94, 106, 210, 0.7); width: 56%; height: 56%; }
+.cal-cell.cal-active.tier-heavy::before { background: linear-gradient(135deg, #7982e0, var(--accent)); width: 68%; height: 68%; box-shadow: 0 0 10px var(--accent-glow); }
+.cal-cell.cal-today { box-shadow: 0 0 0 2px var(--chart-time); border-radius: 50%; }
 
 .icon-btn-trash { color: var(--text-3); padding: 0; width: 40px; }
 .icon-btn-trash svg { width: 18px; height: 18px; }

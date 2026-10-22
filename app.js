@@ -568,6 +568,26 @@
     return set;
   }
 
+  // Working-set tonnage per calendar day (YYYY-MM-DD -> display-unit
+  // volume), for the History calendar's dot-density tiering.
+  function dayVolumeMap() {
+    const map = new Map();
+    for (const w of state.workouts) {
+      const ds = new Date(w.date).toISOString().slice(0, 10);
+      map.set(ds, (map.get(ds) || 0) + volumeDisplayValue(w));
+    }
+    return map;
+  }
+
+  // Classifies a day's volume against the heaviest logged day on record,
+  // for the three-tier dot size/intensity on the History calendar
+  // (reference: the Outsiders' Training Summary dot grid).
+  function dayVolumeTier(volume, maxVolume) {
+    if (!maxVolume) return "light";
+    const frac = volume / maxVolume;
+    return frac < 0.34 ? "light" : frac < 0.67 ? "medium" : "heavy";
+  }
+
   // Current streak = consecutive weeks (Mon–Sun) with ≥1 workout, counting
   // back from this week. This week doesn't break the streak until it ends.
   function weekStreak() {
@@ -2207,10 +2227,65 @@
     return entries;
   }
 
+  // Home's hero card — the acute:chronic training-load ratio (already
+  // computed for Analytics by trainingLoadBalance()) given the big-numeral
+  // gradient-card treatment observed on every screen of the Outsiders
+  // reference. Falls back to a plain effort-colored hero once there's at
+  // least one logged workout but not yet enough history (<3 sessions/28d)
+  // for a load ratio; renders nothing for a brand-new, empty account.
+  function homeHeroCardHtml() {
+    const last = state.workouts[0];
+    const load = trainingLoadBalance();
+    const streak = weekStreak();
+    const sessions = workoutsThisWeek();
+    const tiles = `
+      <div class="metric-tiles">
+        <div class="metric-tile"><span class="metric-tile-dot" style="background:var(--accent);"></span><span class="metric-tile-label">Streak</span><div class="metric-tile-value">${streak} wk</div></div>
+        <div class="metric-tile"><span class="metric-tile-dot" style="background:var(--success);"></span><span class="metric-tile-label">This week</span><div class="metric-tile-value">${sessions} session${sessions === 1 ? "" : "s"}</div></div>
+      </div>
+    `;
+
+    if (load) {
+      const zone = load.ratio < 0.8 ? "easing" : load.ratio <= 1.3 ? "optimal" : load.ratio <= 1.5 ? "pushing" : "spike";
+      const ZONE_COLOR = { easing: "#8b93f0", optimal: "var(--success)", pushing: "var(--warmup)", spike: "var(--danger)" };
+      const ZONE_SUB = {
+        easing: "Easing off vs. your recent average.",
+        optimal: "In the sweet spot — load matches what you're adapted to.",
+        pushing: "Pushing above your recent average.",
+        spike: "Spiking — well above what you're adapted to.",
+      };
+      const spark = weeklyTonnageSeries(8).map((w) => w.value);
+      return `
+        <div class="hero-card hero-card-${zone}">
+          <div class="hero-card-label">Training balance</div>
+          <div class="hero-card-num">${load.ratio.toFixed(2)}<span class="hero-card-unit">×</span></div>
+          <div class="hero-card-sub">${ZONE_SUB[zone]}</div>
+          ${renderSparkline(spark, ZONE_COLOR[zone])}
+        </div>
+        ${tiles}
+      `;
+    }
+
+    if (last && typeof last.effortScore === "number") {
+      return `
+        <div class="hero-card hero-card-pink">
+          <div class="hero-card-label">Last session effort</div>
+          <div class="hero-card-num">${last.effortScore}<span class="hero-card-unit">%</span></div>
+          <div class="hero-card-sub">${escapeHtml(last.name)} · ${fmtDate(last.date)}</div>
+        </div>
+        ${tiles}
+      `;
+    }
+
+    return "";
+  }
+
   function renderHome() {
     const last = state.workouts[0];
     appEl.innerHTML = `
       <div class="topbar"><h1>Home</h1></div>
+
+      ${homeHeroCardHtml()}
 
       ${state.activeWorkout ? `
         <div class="card card-tap" data-action="resume-workout" style="border-color:var(--accent); background:var(--accent-bg);">
@@ -2343,6 +2418,8 @@
 
   function renderCalendarInto(body) {
     const days = workoutDaySet();
+    const volumes = dayVolumeMap();
+    const maxVolume = Math.max(0, ...volumes.values());
     const base = new Date(); base.setDate(1); base.setMonth(base.getMonth() + calendarMonthOffset);
     const year = base.getFullYear(), month = base.getMonth();
     const monthName = base.toLocaleDateString(undefined, { month: "long", year: "numeric" });
@@ -2355,7 +2432,8 @@
     for (let d = 1; d <= daysInMonth; d++) {
       const ds = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const has = days.has(ds); if (has) monthCount++;
-      cells += `<div class="cal-cell ${has ? "cal-active" : ""} ${ds === todayStr ? "cal-today" : ""}"><span>${d}</span></div>`;
+      const tierClass = has ? `tier-${dayVolumeTier(volumes.get(ds) || 0, maxVolume)}` : "";
+      cells += `<div class="cal-cell ${has ? "cal-active" : ""} ${tierClass} ${ds === todayStr ? "cal-today" : ""}"><span>${d}</span></div>`;
     }
     const dow = ["M", "T", "W", "T", "F", "S", "S"].map((d) => `<div class="cal-dow">${d}</div>`).join("");
     body.innerHTML = `
@@ -2646,7 +2724,7 @@
       <div class="az-stats">
         <div class="stat-card"><div class="stat-label">Sessions · 4wk</div><div class="stat-value">${recent.length}</div></div>
         <div class="stat-card"><div class="stat-label">Volume · 4wk</div><div class="stat-value">${Math.round(tonnage28).toLocaleString()}<span class="stat-unit"> ${unitLabel()}</span></div></div>
-        <div class="stat-card"><div class="stat-label">Avg effort</div><div class="stat-value">${avgEffort != null ? avgEffort + "%" : "–"}</div></div>
+        <div class="stat-card${avgEffort != null ? " stat-card-pink" : ""}"><div class="stat-label">Avg effort</div><div class="stat-value">${avgEffort != null ? avgEffort + "%" : "–"}</div></div>
         <div class="stat-card"><div class="stat-label">PRs · 4wk</div><div class="stat-value">${prs28}</div></div>
       </div>
 
@@ -2905,6 +2983,39 @@
       d += ` C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2[0].toFixed(2)},${p2[1].toFixed(2)}`;
     }
     return d;
+  }
+
+  // Compact axis-free trend line for embedding inside a hero card (see
+  // .hero-card-spark) — reference: the thin chart woven into the bottom
+  // edge of every Outsiders metric card. `values` is a plain number
+  // array, oldest -> newest; `color` is any CSS color string.
+  function renderSparkline(values, color) {
+    if (!values || values.length < 2) return "";
+    const W = 300, H = 56, pad = 3;
+    const min = Math.min(...values), max = Math.max(...values);
+    const range = (max - min) || Math.max(max, 1) * 0.1 || 1;
+    const stepX = (W - pad * 2) / (values.length - 1);
+    const coords = values.map((v, i) => [
+      pad + i * stepX,
+      pad + (1 - (v - min) / range) * (H - pad * 2),
+    ]);
+    const lineD = smoothPathD(coords);
+    const areaD = `${lineD} L${coords[coords.length - 1][0].toFixed(2)},${H} L${coords[0][0].toFixed(2)},${H} Z`;
+    const gid = `spark${Math.random().toString(36).slice(2, 8)}`;
+    return `
+      <div class="hero-card-spark">
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${color}" stop-opacity="0.45" />
+              <stop offset="100%" stop-color="${color}" stop-opacity="0" />
+            </linearGradient>
+          </defs>
+          <path d="${areaD}" fill="url(#${gid})" stroke="none" />
+          <path d="${lineD}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </div>
+    `;
   }
 
   // Renders a value-over-time trend chart. `data` is [{date, value}] with
