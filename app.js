@@ -2116,17 +2116,20 @@
   // clock run, optionally log a distance, stop, and rate how hard it felt
   // (RPE) — see sessionLoad() above for how that RPE feeds the same
   // training-balance math as a lifting session.
+  // `distance` marks the types where a mile count makes sense to ask for —
+  // off for anything played on a court/field rather than covering ground.
   const ACTIVITY_TYPES = {
-    run: { label: "Run", icon: "🏃" },
-    walk: { label: "Walk", icon: "🚶" },
-    bike: { label: "Bike", icon: "🚴" },
-    swim: { label: "Swim", icon: "🏊" },
-    pickleball: { label: "Pickleball", icon: "🎾" },
-    basketball: { label: "Basketball", icon: "🏀" },
-    other_cardio: { label: "Other cardio", icon: "🔥" },
+    run: { label: "Run", icon: "🏃", distance: true },
+    walk: { label: "Walk", icon: "🚶", distance: true },
+    bike: { label: "Bike", icon: "🚴", distance: true },
+    swim: { label: "Swim", icon: "🏊", distance: true },
+    pickleball: { label: "Pickleball", icon: "🎾", distance: false },
+    basketball: { label: "Basketball", icon: "🏀", distance: false },
+    other_cardio: { label: "Other cardio", icon: "🔥", distance: false },
   };
   function activityTypeLabel(type) { return (ACTIVITY_TYPES[type] || { label: "Activity" }).label; }
   function activityTypeIcon(type) { return (ACTIVITY_TYPES[type] || { icon: "🔥" }).icon; }
+  function activityTypeHasDistance(type) { return !!(ACTIVITY_TYPES[type] || {}).distance; }
 
   function startCardioActivity(activityType) {
     if (!ACTIVITY_TYPES[activityType]) return;
@@ -2136,7 +2139,6 @@
       name: activityTypeLabel(activityType),
       startedAt: new Date().toISOString(),
       distance: "",
-      notes: "",
     };
     DB.kvSet("activeCardio", state.activeCardio);
     navigate("cardio-active");
@@ -2164,7 +2166,6 @@
       date: a.startedAt,
       durationSec,
       distance: a.distance ? parseFloat(a.distance) || null : null,
-      notes: a.notes || "",
       rpe,
       // Direct RPE->percent, same 0-100 scale every other effort badge in
       // the app already uses — see sessionLoad() for how duration enters
@@ -2193,7 +2194,7 @@
     cardioClockInterval = setInterval(() => {
       const a = state.activeCardio;
       if (!a) { stopCardioClock(); return; }
-      const el = document.getElementById("cardio-elapsed");
+      const el = document.getElementById("cardio-elapsed-big");
       if (!el) return;
       el.textContent = fmtTime((Date.now() - new Date(a.startedAt).getTime()) / 1000);
     }, 1000);
@@ -2205,31 +2206,31 @@
   function renderCardioActive() {
     const a = state.activeCardio;
     if (!a) { navigate("home"); return; }
+    const hasDistance = activityTypeHasDistance(a.activityType);
     appEl.innerHTML = `
       <div class="topbar topbar-sticky">
         <button class="back-btn" data-action="discard-cardio">Discard</button>
-        <span class="workout-clock" id="cardio-elapsed">${fmtTime((Date.now() - new Date(a.startedAt).getTime()) / 1000)}</span>
         <button class="btn btn-sm btn-primary" data-action="finish-cardio">Finish</button>
       </div>
       <div class="cardio-active-icon">${activityTypeIcon(a.activityType)}</div>
       <h1 style="text-align:center;">${escapeHtml(a.name)}</h1>
-      <div class="card" style="margin-top:16px;">
-        <div class="row">
-          <span>Distance <span class="tiny muted">(optional)</span></span>
-          <div class="row-gap">
-            <input type="text" inputmode="decimal" id="cardio-distance" class="set-input" style="width:72px;" value="${escapeHtml(a.distance || "")}" placeholder="—" />
-            <span class="muted small">mi</span>
+      <div class="cardio-elapsed-big" id="cardio-elapsed-big">${fmtTime((Date.now() - new Date(a.startedAt).getTime()) / 1000)}</div>
+      ${hasDistance ? `
+        <div class="card">
+          <div class="row">
+            <span>Distance <span class="tiny muted">(optional)</span></span>
+            <div class="row-gap">
+              <input type="text" inputmode="decimal" id="cardio-distance" class="set-input" style="width:72px;" value="${escapeHtml(a.distance || "")}" placeholder="—" />
+              <span class="muted small">mi</span>
+            </div>
           </div>
         </div>
-        <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
-          <span>Notes <span class="tiny muted">(optional)</span></span>
-        </div>
-        <textarea id="cardio-notes" rows="2" placeholder="Opponent, route, how it felt…" style="margin-top:6px;">${escapeHtml(a.notes || "")}</textarea>
-      </div>
+      ` : ""}
       <div class="tiny muted" style="margin-top:8px; text-align:center;">You'll rate how hard this was when you finish — that's what drives its effort score.</div>
     `;
-    document.getElementById("cardio-distance").addEventListener("change", (e) => { a.distance = e.target.value; DB.kvSet("activeCardio", a); });
-    document.getElementById("cardio-notes").addEventListener("change", (e) => { a.notes = e.target.value; DB.kvSet("activeCardio", a); });
+    if (hasDistance) {
+      document.getElementById("cardio-distance").addEventListener("change", (e) => { a.distance = e.target.value; DB.kvSet("activeCardio", a); });
+    }
     startCardioClock();
   }
 
@@ -2277,7 +2278,6 @@
           ${a.distance ? `<div class="stat-card"><div class="stat-label">Distance</div><div class="stat-value">${a.distance}<span class="stat-unit"> mi</span></div></div>` : ""}
           <div class="stat-card"><div class="stat-label">Training load</div><div class="stat-value">${Math.round(sessionLoad(a)).toLocaleString()}</div></div>
         </div>
-        ${a.notes ? `<div class="card" style="text-align:left; width:100%;"><div class="small">${escapeHtml(a.notes)}</div></div>` : ""}
         <div class="complete-actions">
           <button class="btn btn-primary" data-action="complete-done">Done</button>
         </div>
@@ -2304,7 +2304,6 @@
         ${a.distance ? `<div class="stat-card"><div class="stat-label">Distance</div><div class="stat-value">${a.distance}<span class="stat-unit"> mi</span></div></div>` : ""}
         <div class="stat-card"><div class="stat-label">Training load</div><div class="stat-value">${Math.round(sessionLoad(a)).toLocaleString()}</div></div>
       </div>
-      ${a.notes ? `<div class="card" style="text-align:left;"><div class="small">${escapeHtml(a.notes)}</div></div>` : ""}
     `;
     initEffortRing(document.getElementById("effort-ring"));
   }

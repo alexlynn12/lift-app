@@ -665,8 +665,20 @@ input[type="number"] {
 .rpe-chip-num { font-size: var(--fs-lg); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
 .rpe-chip-label { font-size: 9px; color: var(--text-2); text-align: center; line-height: 1.1; }
 
-/* Cardio active/detail screens */
+/* Cardio active/detail screens — a single large stopwatch readout replaces
+   the small topbar clock while an activity is running (the number you
+   actually glance at mid-run), tabular-nums so the digits don't shift
+   width as seconds tick over. */
 .cardio-active-icon { font-size: 56px; text-align: center; margin: 8px 0 4px; }
+.cardio-elapsed-big {
+  font-size: 64px;
+  font-weight: var(--fw-bold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  text-align: center;
+  margin: 4px 0 28px;
+  color: var(--text);
+}
 
 /* Profile screen */
 .profile-avatar-row { display: flex; justify-content: center; margin: 12px 0 20px; }
