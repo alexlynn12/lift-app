@@ -579,7 +579,11 @@ input[type="number"] {
    links into the unchanged Settings screen. */
 .profile-btn {
   position: fixed;
-  top: calc(var(--safe-top) + 10px);
+  /* env(safe-area-inset-top) reflects the Dynamic Island's static height,
+     not the wider pill it expands to for an active Live Activity (e.g. a
+     running timer) — there's no CSS signal for that, so this clears it
+     with extra margin rather than hugging the safe-area edge. */
+  top: calc(var(--safe-top) + 18px);
   right: 16px;
   z-index: 17;
   width: 38px;

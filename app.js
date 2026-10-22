@@ -136,7 +136,34 @@
     const kind = t.dataset.start;
     closeStartActivitySheet();
     if (kind === "strength") startWorkout(null);
+    else if (kind === "custom") openCustomActivitySheet();
     else startCardioActivity(kind);
+  });
+
+  // A one-off activity name not in the built-in list — still filed under
+  // "other_cardio" (same icon, no distance field) so every existing
+  // ACTIVITY_TYPES lookup keeps working unchanged; only the display name
+  // differs from the type's default label.
+  const customActivitySheetEl = document.getElementById("custom-activity-sheet");
+  const customActivityNameInput = document.getElementById("custom-activity-name");
+  const customActivityCancelBtn = document.getElementById("custom-activity-cancel");
+  const customActivityStartBtn = document.getElementById("custom-activity-start");
+
+  function openCustomActivitySheet() {
+    customActivityNameInput.value = "";
+    customActivitySheetEl.classList.remove("hidden");
+    requestAnimationFrame(() => { customActivitySheetEl.classList.add("open"); customActivityNameInput.focus(); });
+  }
+  function closeCustomActivitySheet() {
+    customActivitySheetEl.classList.remove("open");
+    setTimeout(() => customActivitySheetEl.classList.add("hidden"), 180);
+  }
+  customActivityCancelBtn.addEventListener("click", () => { tapFeedback(customActivityCancelBtn); closeCustomActivitySheet(); });
+  customActivityStartBtn.addEventListener("click", () => {
+    tapFeedback(customActivityStartBtn, "primary");
+    const name = customActivityNameInput.value.trim();
+    closeCustomActivitySheet();
+    startCardioActivity("other_cardio", name || undefined);
   });
 
   // ---------- Per-exercise "..." options menu (routine editor) ----------
@@ -2131,12 +2158,12 @@
   function activityTypeIcon(type) { return (ACTIVITY_TYPES[type] || { icon: "🔥" }).icon; }
   function activityTypeHasDistance(type) { return !!(ACTIVITY_TYPES[type] || {}).distance; }
 
-  function startCardioActivity(activityType) {
+  function startCardioActivity(activityType, customName) {
     if (!ACTIVITY_TYPES[activityType]) return;
     state.activeCardio = {
       id: uid(),
       activityType,
-      name: activityTypeLabel(activityType),
+      name: customName || activityTypeLabel(activityType),
       startedAt: new Date().toISOString(),
       distance: "",
     };

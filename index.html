@@ -236,9 +236,24 @@
       <button class="menu-item" data-start="swim"><span>🏊 Swim</span></button>
       <button class="menu-item" data-start="pickleball"><span>🎾 Pickleball</span></button>
       <button class="menu-item" data-start="basketball"><span>🏀 Basketball</span></button>
-      <button class="menu-item" data-start="other_cardio"><span>🔥 Other cardio</span></button>
+      <button class="menu-item" data-start="custom"><span>➕ Create your own</span></button>
     </div>
     <button class="confirm-btn confirm-btn-cancel" id="start-activity-close" data-sheet-dismiss style="margin-top:14px; width:100%;">Cancel</button>
+  </div>
+</div>
+
+<!-- Names a one-off activity type not in the built-in list (opened by
+     "Create your own" above). Carries the activityType "other_cardio" under
+     the hood — same icon/no-distance treatment — with this name instead. -->
+<div id="custom-activity-sheet" class="confirm-overlay hidden">
+  <div class="confirm-card">
+    <div class="confirm-card-handle"></div>
+    <div class="confirm-title">Name this activity</div>
+    <input type="text" id="custom-activity-name" placeholder="e.g. Yoga, Hiking, Rock climbing" style="margin-bottom:16px;" maxlength="40" />
+    <div class="confirm-actions">
+      <button class="confirm-btn confirm-btn-cancel" id="custom-activity-cancel" data-sheet-dismiss>Cancel</button>
+      <button class="confirm-btn confirm-btn-ok" id="custom-activity-start">Start</button>
+    </div>
   </div>
 </div>
 
