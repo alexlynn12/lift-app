@@ -574,6 +574,122 @@ input[type="number"] {
 .tab.active .tab-icon { color: var(--accent); transform: translateY(-1px) scale(1.06); }
 .tab-label { font-size: var(--fs-2xs); font-weight: var(--fw-medium); }
 
+/* Profile button — fixed top-right on the tab screens (see #profile-btn in
+   index.html). Replaces the old Settings tab: tap opens Profile, which
+   links into the unchanged Settings screen. */
+.profile-btn {
+  position: fixed;
+  top: calc(var(--safe-top) + 10px);
+  right: 16px;
+  z-index: 17;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  overflow: hidden;
+  padding: 0;
+}
+.profile-btn:active { opacity: 0.8; }
+.profile-btn-img { width: 100%; height: 100%; object-fit: cover; border-radius: 50%; }
+.profile-btn-img.hidden { display: none; }
+.profile-btn svg { width: 20px; height: 20px; }
+.profile-btn-icon.hidden { display: none; }
+
+/* Start FAB — replaces the bottom-right Settings tab slot and the old Home
+   "+ Start empty workout" button. Deliberately NOT the app's indigo accent
+   (pink gradient, matching the hero-card treatment) and circular/floating
+   rather than inline, so it reads as a distinct, separate action from the
+   three tabs beside it. */
+.fab-start {
+  position: fixed;
+  right: 16px;
+  bottom: calc(64px + var(--safe-bottom));
+  z-index: 19;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--pink-2), var(--pink));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 20px rgba(255, 63, 176, 0.45), var(--shadow-float);
+  border: none;
+}
+.fab-start svg { width: 26px; height: 26px; }
+.fab-start:active { transform: scale(0.94); }
+
+/* Hero card / metric tile tap targets — a dedicated :active treatment
+   rather than reusing .card-tap's background swap, which would wash out
+   the gradient fill these sit on. */
+.hero-card-tap { cursor: pointer; transition: transform 0.12s ease, opacity 0.12s ease; }
+.hero-card-tap:active { transform: scale(0.98); opacity: 0.92; }
+.metric-tile-tap { cursor: pointer; transition: transform 0.12s ease, background 0.12s ease; }
+.metric-tile-tap:active { background: var(--surface-2); transform: scale(0.98); }
+
+/* Generic info sheet body (see #info-sheet-overlay) */
+.info-sheet-body { text-align: left; }
+.info-stat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--text-2);
+}
+.info-stat-row:last-of-type { border-bottom: none; }
+.info-stat-row strong { color: var(--text); font-variant-numeric: tabular-nums; font-size: var(--fs-base); }
+
+/* RPE picker (end-of-activity rating sheet) */
+.rpe-picker { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.rpe-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.rpe-chip:active { background: var(--accent-bg); border-color: var(--accent); }
+.rpe-chip-num { font-size: var(--fs-lg); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
+.rpe-chip-label { font-size: 9px; color: var(--text-2); text-align: center; line-height: 1.1; }
+
+/* Cardio active/detail screens */
+.cardio-active-icon { font-size: 56px; text-align: center; margin: 8px 0 4px; }
+
+/* Profile screen */
+.profile-avatar-row { display: flex; justify-content: center; margin: 12px 0 20px; }
+.profile-avatar-big {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 112px;
+  padding: 0;
+}
+.profile-avatar-big > img,
+.profile-avatar-big > svg {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-3);
+  padding: 20px;
+  box-sizing: border-box;
+}
+.profile-avatar-big > img { padding: 0; }
+.profile-avatar-edit { font-size: var(--fs-xs); color: var(--accent); font-weight: var(--fw-medium); }
+
 /* Set rows */
 .set-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
 .set-table th {

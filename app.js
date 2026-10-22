@@ -27,6 +27,16 @@
     // Set shape: {weight, reps, completed, isWarmup?, rpe?, type?}  type ∈ "drop"|"failure"
     // Exercise shape may carry supersetId to group it with adjacent exercises.
     activeWorkout: null,
+    // Cardio/other non-strength sessions — see ACTIVITY_TYPES below. Record
+    // shape: {id, activityType, name, date, durationSec, distance?, notes?,
+    // rpe, effortScore, prCount:0}. Kept in a separate array/store from
+    // state.workouts (which many existing functions assume has .exercises)
+    // rather than merged in; see allSessions()/isCardioSession().
+    activities: [],
+    activeCardio: null,
+    // Data-URL profile photo (if the person uploaded one), kept outside
+    // `settings` so it doesn't bloat that blob on every settings save.
+    profilePhoto: null,
   };
 
 
@@ -62,6 +72,72 @@
 
   confirmCancelBtn.addEventListener("click", () => { tapFeedback(confirmCancelBtn); closeConfirm(false); });
   confirmOkBtn.addEventListener("click", () => { tapFeedback(confirmOkBtn); closeConfirm(true); });
+
+  // ---------- Generic info sheet ----------
+  // The shared "tap a box, see the numbers behind it" surface used by the
+  // Home hero card, Analytics' training-load/muscle-stimulus rows, and the
+  // History calendar's day-detail. Reuses the .confirm-overlay/.confirm-card
+  // classes (not a bespoke one-off) so it gets drag-to-dismiss for free from
+  // initSheetDrag(".confirm-overlay", ...) below.
+  const infoSheetOverlayEl = document.getElementById("info-sheet-overlay");
+  const infoSheetTitleEl = document.getElementById("info-sheet-title");
+  const infoSheetBodyEl = document.getElementById("info-sheet-body");
+  const infoSheetCloseBtn = document.getElementById("info-sheet-close");
+
+  function openInfoSheet(title, bodyHtml) {
+    infoSheetTitleEl.textContent = title;
+    infoSheetBodyEl.innerHTML = bodyHtml;
+    infoSheetOverlayEl.classList.remove("hidden");
+    requestAnimationFrame(() => infoSheetOverlayEl.classList.add("open"));
+  }
+  function closeInfoSheet() {
+    infoSheetOverlayEl.classList.remove("open");
+    setTimeout(() => infoSheetOverlayEl.classList.add("hidden"), 180);
+  }
+  infoSheetCloseBtn.addEventListener("click", () => { tapFeedback(infoSheetCloseBtn); closeInfoSheet(); });
+  // A sheet can carry its own [data-nav-route] links (e.g. "jump to this
+  // workout" inside a calendar day's session list) — info-sheet-body lives
+  // outside #app, so it needs its own delegated listener rather than
+  // riding onAppClick's.
+  infoSheetBodyEl.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-nav-route]");
+    if (!t) return;
+    tapFeedback(t);
+    closeInfoSheet();
+    navigate(t.dataset.navRoute, t.dataset.navId ? { id: t.dataset.navId } : undefined);
+  });
+
+  // ---------- Profile button / start FAB / activity picker ----------
+  // Chrome fixed outside #app (see index.html), so these need their own
+  // listeners rather than riding onAppClick's #app-scoped delegation.
+  document.getElementById("profile-btn").addEventListener("click", (e) => {
+    tapFeedback(e.currentTarget);
+    navigate("profile");
+  });
+
+  const startActivitySheetEl = document.getElementById("start-activity-sheet");
+  const startActivityActionsEl = document.getElementById("start-activity-actions");
+  const startActivityCloseBtn = document.getElementById("start-activity-close");
+
+  function openStartActivitySheet() {
+    startActivitySheetEl.classList.remove("hidden");
+    requestAnimationFrame(() => startActivitySheetEl.classList.add("open"));
+  }
+  function closeStartActivitySheet() {
+    startActivitySheetEl.classList.remove("open");
+    setTimeout(() => startActivitySheetEl.classList.add("hidden"), 180);
+  }
+  document.getElementById("fab-start").addEventListener("click", (e) => { tapFeedback(e.currentTarget, "primary"); openStartActivitySheet(); });
+  startActivityCloseBtn.addEventListener("click", () => { tapFeedback(startActivityCloseBtn); closeStartActivitySheet(); });
+  startActivityActionsEl.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-start]");
+    if (!t) return;
+    tapFeedback(t);
+    const kind = t.dataset.start;
+    closeStartActivitySheet();
+    if (kind === "strength") startWorkout(null);
+    else startCardioActivity(kind);
+  });
 
   // ---------- Per-exercise "..." options menu (routine editor) ----------
   // Lets a routine exercise carry a free-text note (RPE, rep range, tempo,
@@ -272,12 +348,15 @@
 
   // ---------- Persistence ----------
   async function loadAll() {
-    const [settings, customExercises, routines, workouts, activeWorkout] = await Promise.all([
+    const [settings, customExercises, routines, workouts, activeWorkout, activities, activeCardio, profilePhoto] = await Promise.all([
       DB.kvGet("settings", null),
       DB.getAll("exercises"),
       DB.getAll("routines"),
       DB.getAll("workouts"),
       DB.kvGet("activeWorkout", null),
+      DB.getAll("activities"),
+      DB.kvGet("activeCardio", null),
+      DB.kvGet("profilePhoto", null),
     ]);
     // Merge (not replace) so new setting fields added after someone's first
     // install — like bodyWeightLb — still get their default instead of
@@ -294,6 +373,9 @@
     await removeLegacyProgram();
     state.workouts = (workouts || []).sort((a, b) => new Date(b.date) - new Date(a.date));
     state.activeWorkout = activeWorkout;
+    state.activities = (activities || []).sort((a, b) => new Date(b.date) - new Date(a.date));
+    state.activeCardio = activeCardio;
+    state.profilePhoto = profilePhoto;
 
     await backfillEffortScores();
 
@@ -560,21 +642,52 @@
       .sort((a, b) => b.sets - a.sets);
   }
 
+  // ===== Cross-modality sessions (strength workouts + cardio activities) =====
+  // A strength workout (state.workouts) and a cardio activity (state.activities,
+  // see ACTIVITY_TYPES below) are different shapes — one has .exercises/.sets,
+  // the other has .activityType/.rpe — so anything that needs to reason about
+  // "everything you did" goes through these two helpers rather than touching
+  // state.workouts directly, to keep the two data models from leaking into
+  // each other's 70+ existing call sites.
+  function isCardioSession(s) { return !s.exercises; }
+
+  function allSessions() {
+    return [...state.workouts, ...state.activities].sort((a, b) => new Date(b.date) - new Date(a.date));
+  }
+
+  // Unified per-session training load, independent of modality — the
+  // session-RPE method (Foster et al. 2001: load = duration(min) × RPE),
+  // the standard way sports science quantifies load without heart-rate
+  // data. Cardio activities carry a direct user-rated RPE (1–10); a
+  // strength workout has no explicit RPE, so its effort score (already
+  // 0–100) stands in as an RPE-equivalent (÷10). This is what lets the
+  // Home hero card's acute:chronic ratio reflect total training stress —
+  // lifting, a run, or a pickup game — on one scale.
+  function sessionLoad(s) {
+    const minutes = (s.durationSec || 0) / 60;
+    if (!minutes) return 0;
+    if (typeof s.rpe === "number") return minutes * s.rpe;
+    if (typeof s.effortScore === "number") return minutes * (s.effortScore / 10);
+    return 0;
+  }
+
   // ===== Training calendar / streak / frequency =====
-  // Set of YYYY-MM-DD strings on which at least one workout was logged.
+  // Set of YYYY-MM-DD strings on which at least one session (strength or
+  // cardio) was logged.
   function workoutDaySet() {
     const set = new Set();
-    for (const w of state.workouts) set.add(new Date(w.date).toISOString().slice(0, 10));
+    for (const s of allSessions()) set.add(new Date(s.date).toISOString().slice(0, 10));
     return set;
   }
 
-  // Working-set tonnage per calendar day (YYYY-MM-DD -> display-unit
-  // volume), for the History calendar's dot-density tiering.
+  // Unified per-session load (see sessionLoad) per calendar day, for the
+  // History calendar's dot-density tiering — a heavy lift day and a hard
+  // long run both read as "a lot of training" that day.
   function dayVolumeMap() {
     const map = new Map();
-    for (const w of state.workouts) {
-      const ds = new Date(w.date).toISOString().slice(0, 10);
-      map.set(ds, (map.get(ds) || 0) + volumeDisplayValue(w));
+    for (const s of allSessions()) {
+      const ds = new Date(s.date).toISOString().slice(0, 10);
+      map.set(ds, (map.get(ds) || 0) + sessionLoad(s));
     }
     return map;
   }
@@ -591,14 +704,15 @@
   // Current streak = consecutive weeks (Mon–Sun) with ≥1 workout, counting
   // back from this week. This week doesn't break the streak until it ends.
   function weekStreak() {
-    if (state.workouts.length === 0) return 0;
+    const sessions = allSessions();
+    if (sessions.length === 0) return 0;
     const weekKey = (d) => {
       const dt = new Date(d);
       const day = (dt.getDay() + 6) % 7; // Mon=0
       dt.setDate(dt.getDate() - day); dt.setHours(0, 0, 0, 0);
       return dt.getTime();
     };
-    const weeks = new Set(state.workouts.map((w) => weekKey(w.date)));
+    const weeks = new Set(sessions.map((w) => weekKey(w.date)));
     const WEEK = 7 * 86400000;
     let cursor = weekKey(Date.now());
     let streak = 0;
@@ -611,7 +725,7 @@
     const now = new Date();
     const day = (now.getDay() + 6) % 7;
     const monday = new Date(now); monday.setDate(now.getDate() - day); monday.setHours(0, 0, 0, 0);
-    return state.workouts.filter((w) => new Date(w.date) >= monday).length;
+    return allSessions().filter((w) => new Date(w.date) >= monday).length;
   }
 
   // ===== Auto-progression suggestion =====
@@ -1166,7 +1280,7 @@
 
   function trainingInsightCardHtml(i) {
     return `
-      <div class="suggest-card ${i.kind === "good" ? "" : "suggest-hold"} coach-${i.kind}">
+      <div class="suggest-card card-tap ${i.kind === "good" ? "" : "suggest-hold"} coach-${i.kind}" data-action="go-analytics">
         <span class="suggest-icon">${i.kind === "warn" ? "!" : i.kind === "suggest" ? "+" : i.kind === "good" ? "▲" : "→"}</span>
         <div style="flex:1; min-width:0;">
           <div class="suggest-title">${escapeHtml(i.title)}</div>
@@ -1492,75 +1606,9 @@
     return value;
   }
 
-  function suggestionRoutineId(sw, day) { return `sugg:${sw.weekKey}:${day.key}`; }
-  function suggestedDayDone(sw, day) {
-    const id = suggestionRoutineId(sw, day);
-    return state.workouts.some((w) => w.routineId === id);
-  }
-  function suggestedDayAsRoutine(sw, day) {
-    return {
-      id: suggestionRoutineId(sw, day),
-      name: day.label,
-      exercises: day.exercises.map((e) => ({ exerciseId: e.exerciseId, note: e.note, sets: e.sets.map((s) => ({ weight: s.weight, reps: s.reps, isWarmup: false })) })),
-    };
-  }
-
-  function renderSuggestedWeekHtml() {
-    if (!state.workouts.length) return "";
-    const sw = suggestedWeek();
-    const nextIdx = sw.days.findIndex((d) => !suggestedDayDone(sw, d));
-    const fmtSets = (e) => {
-      const g = [];
-      for (const s of e.sets) { const l = g[g.length - 1]; if (l && l.w === s.weight && l.r === s.reps) l.n++; else g.push({ n: 1, w: s.weight, r: s.reps }); }
-      return g.map((x) => `${x.n}×${x.r}${x.w !== "" ? ` @ ${weightToDisplay(x.w)}` : ""}`).join(" + ");
-    };
-    return `
-      <div class="section">
-        <div class="row" style="margin-bottom:8px;">
-          <h3 style="margin:0;">This week's plan</h3>
-          <span class="badge ${sw.deload ? "badge-muted" : "badge-accent"}">${sw.days.length}-day ${escapeHtml(sw.splitName)}${sw.deload ? " · deload" : ""}</span>
-        </div>
-        <div class="tiny muted" style="margin:-4px 0 8px;">Built from your last ${sw.basedOnWeeks || "few"} weeks: what you've done, what each muscle needs, and what's been neglected. Updates every Monday.</div>
-        ${sw.days.map((d, i) => {
-          const done = suggestedDayDone(sw, d);
-          const main = d.exercises.filter((e) => e.kind === "main").map((e) => `${escapeHtml(exerciseById(e.exerciseId).name)} ${fmtSets(e)}`).join(" · ");
-          const nSets = d.exercises.reduce((n, e) => n + e.sets.length, 0);
-          return `
-          <div class="card card-tap" data-action="open-suggested" data-key="${d.key}" ${i === nextIdx ? `style="border-color:var(--accent);"` : ""}>
-            <div class="row">
-              <div style="min-width:0;">
-                <div style="font-weight:700;">${escapeHtml(d.label)}${done ? ` <span class="badge badge-success" style="margin-left:4px; vertical-align:2px;">Done</span>` : i === nextIdx ? ` <span class="badge badge-accent" style="margin-left:4px; vertical-align:2px;">Next</span>` : ""}</div>
-                <div class="small muted">${main || `${d.exercises.length} exercises`} · ${nSets} sets</div>
-              </div>
-              <button class="btn btn-sm ${done ? "" : "btn-accent"}" data-action="start-suggested" data-key="${d.key}">${done ? "Again" : "Start"}</button>
-            </div>
-          </div>`;
-        }).join("")}
-      </div>`;
-  }
-
-  function renderSuggestedDay(params) {
-    const sw = suggestedWeek();
-    const d = sw.days.find((x) => x.key === params.key);
-    if (!d) { navigate("home"); return; }
-    appEl.innerHTML = `
-      <div class="topbar"><button class="back-btn" data-action="back">‹ Back</button></div>
-      <h1>${escapeHtml(d.label)}</h1>
-      <div class="small muted" style="margin-top:-12px; margin-bottom:16px;">Suggested for the week of ${fmtDate(new Date(sw.weekStart).toISOString())}${sw.deload ? " · deload week" : ""}</div>
-      ${d.exercises.map((e) => {
-        const ex = exerciseById(e.exerciseId);
-        return `
-        <div class="exercise-block">
-          <div class="ex-title">${tierChipHtml(ex)} ${escapeHtml(ex.name)}</div>
-          <div class="small" style="margin:4px 0;">${e.sets.length} × ${e.repRange ? `${e.repRange[0]}–${e.repRange[1]}` : e.sets.map((s) => s.reps).join("/")}${e.sets[0] && e.sets[0].weight !== "" ? ` @ ${[...new Set(e.sets.map((s) => weightToDisplay(s.weight)))].join(" / ")} ${unitLabel()}` : ""}</div>
-          <div class="tiny muted">${escapeHtml(e.note || "")}</div>
-          ${e.reason ? `<div class="coach-cite">${escapeHtml(e.reason)}</div>` : ""}
-        </div>`;
-      }).join("")}
-      <button class="btn btn-primary" style="margin-top:12px;" data-action="start-suggested" data-key="${d.key}">Start this workout</button>
-      <button class="btn" style="margin-top:8px;" data-action="save-suggested" data-key="${d.key}">Save as routine</button>
-    `;
-  }
+  // Suggested-weekly-workouts UI was removed 2026-10-22 at Alex's request.
+  // suggestedWeek() itself stays (below) — buildClaudeExport() still reads
+  // it for plan context — but nothing renders it as a workout to start.
 
   // ===== Ask Claude (copy-paste hand-off, no API) =====
   function askClaudeButtonHtml() {
@@ -2063,16 +2111,218 @@
     navigate("home");
   }
 
+  // ---------- Cardio / other activities ----------
+  // A lightweight second workout type alongside strength: start, let the
+  // clock run, optionally log a distance, stop, and rate how hard it felt
+  // (RPE) — see sessionLoad() above for how that RPE feeds the same
+  // training-balance math as a lifting session.
+  const ACTIVITY_TYPES = {
+    run: { label: "Run", icon: "🏃" },
+    walk: { label: "Walk", icon: "🚶" },
+    bike: { label: "Bike", icon: "🚴" },
+    swim: { label: "Swim", icon: "🏊" },
+    pickleball: { label: "Pickleball", icon: "🎾" },
+    basketball: { label: "Basketball", icon: "🏀" },
+    other_cardio: { label: "Other cardio", icon: "🔥" },
+  };
+  function activityTypeLabel(type) { return (ACTIVITY_TYPES[type] || { label: "Activity" }).label; }
+  function activityTypeIcon(type) { return (ACTIVITY_TYPES[type] || { icon: "🔥" }).icon; }
+
+  function startCardioActivity(activityType) {
+    if (!ACTIVITY_TYPES[activityType]) return;
+    state.activeCardio = {
+      id: uid(),
+      activityType,
+      name: activityTypeLabel(activityType),
+      startedAt: new Date().toISOString(),
+      distance: "",
+      notes: "",
+    };
+    DB.kvSet("activeCardio", state.activeCardio);
+    navigate("cardio-active");
+  }
+
+  function discardCardioActivity() {
+    state.activeCardio = null;
+    stopCardioClock();
+    DB.kvSet("activeCardio", null);
+    navigate("home");
+  }
+
+  // Builds + saves the activity record once an RPE has been picked (see
+  // the #rpe-sheet-overlay flow below), mirroring finishWorkout()'s shape
+  // (durationSec, effortScore, prCount) so History/Home can treat both
+  // kinds of session uniformly wherever that's useful (allSessions()).
+  async function saveCardioActivity(rpe) {
+    const a = state.activeCardio;
+    if (!a) return;
+    const durationSec = Math.max(1, Math.round((Date.now() - new Date(a.startedAt).getTime()) / 1000));
+    const record = {
+      id: a.id,
+      activityType: a.activityType,
+      name: a.name,
+      date: a.startedAt,
+      durationSec,
+      distance: a.distance ? parseFloat(a.distance) || null : null,
+      notes: a.notes || "",
+      rpe,
+      // Direct RPE->percent, same 0-100 scale every other effort badge in
+      // the app already uses — see sessionLoad() for how duration enters
+      // the *load* side separately (intensity vs. volume, same split the
+      // strength formula makes).
+      effortScore: Math.round(rpe * 10),
+      prCount: 0,
+    };
+    await DB.put("activities", record);
+    state.activities.unshift(record);
+    state.activeCardio = null;
+    stopCardioClock();
+    await DB.kvSet("activeCardio", null);
+    navigate("cardio-complete", { id: record.id });
+  }
+
+  function deleteActivity(id) {
+    state.activities = state.activities.filter((a) => a.id !== id);
+    DB.delete("activities", id);
+    navigate("history", { tab: "workouts" });
+  }
+
+  let cardioClockInterval = null;
+  function startCardioClock() {
+    if (cardioClockInterval) return;
+    cardioClockInterval = setInterval(() => {
+      const a = state.activeCardio;
+      if (!a) { stopCardioClock(); return; }
+      const el = document.getElementById("cardio-elapsed");
+      if (!el) return;
+      el.textContent = fmtTime((Date.now() - new Date(a.startedAt).getTime()) / 1000);
+    }, 1000);
+  }
+  function stopCardioClock() {
+    if (cardioClockInterval) { clearInterval(cardioClockInterval); cardioClockInterval = null; }
+  }
+
+  function renderCardioActive() {
+    const a = state.activeCardio;
+    if (!a) { navigate("home"); return; }
+    appEl.innerHTML = `
+      <div class="topbar topbar-sticky">
+        <button class="back-btn" data-action="discard-cardio">Discard</button>
+        <span class="workout-clock" id="cardio-elapsed">${fmtTime((Date.now() - new Date(a.startedAt).getTime()) / 1000)}</span>
+        <button class="btn btn-sm btn-primary" data-action="finish-cardio">Finish</button>
+      </div>
+      <div class="cardio-active-icon">${activityTypeIcon(a.activityType)}</div>
+      <h1 style="text-align:center;">${escapeHtml(a.name)}</h1>
+      <div class="card" style="margin-top:16px;">
+        <div class="row">
+          <span>Distance <span class="tiny muted">(optional)</span></span>
+          <div class="row-gap">
+            <input type="text" inputmode="decimal" id="cardio-distance" class="set-input" style="width:72px;" value="${escapeHtml(a.distance || "")}" placeholder="—" />
+            <span class="muted small">mi</span>
+          </div>
+        </div>
+        <div class="row" style="border-top:1px solid var(--border); padding-top:12px; margin-top:12px;">
+          <span>Notes <span class="tiny muted">(optional)</span></span>
+        </div>
+        <textarea id="cardio-notes" rows="2" placeholder="Opponent, route, how it felt…" style="margin-top:6px;">${escapeHtml(a.notes || "")}</textarea>
+      </div>
+      <div class="tiny muted" style="margin-top:8px; text-align:center;">You'll rate how hard this was when you finish — that's what drives its effort score.</div>
+    `;
+    document.getElementById("cardio-distance").addEventListener("change", (e) => { a.distance = e.target.value; DB.kvSet("activeCardio", a); });
+    document.getElementById("cardio-notes").addEventListener("change", (e) => { a.notes = e.target.value; DB.kvSet("activeCardio", a); });
+    startCardioClock();
+  }
+
+  const rpeSheetOverlayEl = document.getElementById("rpe-sheet-overlay");
+  const rpePickerEl = document.getElementById("rpe-picker");
+  const rpeSheetCancelBtn = document.getElementById("rpe-sheet-cancel");
+  const RPE_LABELS = { 1: "Very easy", 2: "Easy", 3: "Easy", 4: "Moderate", 5: "Moderate", 6: "Somewhat hard", 7: "Hard", 8: "Hard", 9: "Very hard", 10: "All-out" };
+
+  function openRpeSheet() {
+    rpePickerEl.innerHTML = Array.from({ length: 10 }, (_, i) => i + 1).map((n) => `
+      <button class="rpe-chip" data-rpe="${n}">
+        <span class="rpe-chip-num">${n}</span>
+        <span class="rpe-chip-label">${RPE_LABELS[n]}</span>
+      </button>
+    `).join("");
+    rpeSheetOverlayEl.classList.remove("hidden");
+    requestAnimationFrame(() => rpeSheetOverlayEl.classList.add("open"));
+  }
+  function closeRpeSheet() {
+    rpeSheetOverlayEl.classList.remove("open");
+    setTimeout(() => rpeSheetOverlayEl.classList.add("hidden"), 180);
+  }
+  rpeSheetCancelBtn.addEventListener("click", () => { tapFeedback(rpeSheetCancelBtn); closeRpeSheet(); });
+  rpePickerEl.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-rpe]");
+    if (!t) return;
+    tapFeedback(t, "primary");
+    const rpe = parseInt(t.dataset.rpe, 10);
+    closeRpeSheet();
+    saveCardioActivity(rpe);
+  });
+
+  function renderCardioComplete(params) {
+    const a = state.activities.find((x) => x.id === params.id);
+    if (!a) { navigate("home"); return; }
+    appEl.innerHTML = `
+      <div class="complete-wrap">
+        <div class="complete-icon">${ICONS.check}</div>
+        <div class="complete-title">${escapeHtml(a.name)} logged</div>
+        <div class="complete-subtitle">${fmtDate(a.date)} · ${fmtDuration(a.durationSec)}</div>
+        ${renderEffortRing(a.effortScore)}
+        <div class="complete-stats">
+          <div class="stat-card"><div class="stat-label">Duration</div><div class="stat-value">${fmtDuration(a.durationSec)}</div></div>
+          <div class="stat-card"><div class="stat-label">RPE</div><div class="stat-value">${a.rpe}/10</div></div>
+          ${a.distance ? `<div class="stat-card"><div class="stat-label">Distance</div><div class="stat-value">${a.distance}<span class="stat-unit"> mi</span></div></div>` : ""}
+          <div class="stat-card"><div class="stat-label">Training load</div><div class="stat-value">${Math.round(sessionLoad(a)).toLocaleString()}</div></div>
+        </div>
+        ${a.notes ? `<div class="card" style="text-align:left; width:100%;"><div class="small">${escapeHtml(a.notes)}</div></div>` : ""}
+        <div class="complete-actions">
+          <button class="btn btn-primary" data-action="complete-done">Done</button>
+        </div>
+      </div>
+    `;
+    initEffortRing(document.getElementById("effort-ring"));
+  }
+
+  function renderActivityDetail(params) {
+    const a = state.activities.find((x) => x.id === params.id);
+    if (!a) { navigate("home"); return; }
+    appEl.innerHTML = `
+      <div class="topbar">
+        <button class="back-btn" data-action="back">‹ Back</button>
+        <button class="icon-btn icon-btn-trash" data-action="delete-activity" data-id="${a.id}" aria-label="Delete">${ICONS.trash}</button>
+      </div>
+      <div class="cardio-active-icon">${activityTypeIcon(a.activityType)}</div>
+      <h1 style="text-align:center;">${escapeHtml(a.name)}</h1>
+      <div class="small muted" style="text-align:center; margin-top:-12px;">${fmtDate(a.date)}</div>
+      ${renderEffortRing(a.effortScore)}
+      <div class="complete-stats">
+        <div class="stat-card"><div class="stat-label">Duration</div><div class="stat-value">${fmtDuration(a.durationSec)}</div></div>
+        <div class="stat-card"><div class="stat-label">RPE</div><div class="stat-value">${a.rpe}/10</div></div>
+        ${a.distance ? `<div class="stat-card"><div class="stat-label">Distance</div><div class="stat-value">${a.distance}<span class="stat-unit"> mi</span></div></div>` : ""}
+        <div class="stat-card"><div class="stat-label">Training load</div><div class="stat-value">${Math.round(sessionLoad(a)).toLocaleString()}</div></div>
+      </div>
+      ${a.notes ? `<div class="card" style="text-align:left;"><div class="small">${escapeHtml(a.notes)}</div></div>` : ""}
+    `;
+    initEffortRing(document.getElementById("effort-ring"));
+  }
+
   // ---------- Render ----------
   let lastRenderedHash = null;
 
   // Collapsing large-title header — see #mini-topbar in index.html. Only
-  // the four tab screens use it; everything else (workout-active,
-  // routine-edit, etc.) has its own topbar and leaves this hidden.
-  const TAB_ROUTES = ["home", "history", "analytics", "settings"];
-  const TAB_TITLES = { home: "Home", history: "History", analytics: "Analytics", settings: "Settings" };
+  // the tab screens use it; everything else (workout-active, profile,
+  // routine-edit, etc.) has its own topbar and leaves this hidden. Settings
+  // moved behind the profile button 2026-10-22 and is no longer a tab, but
+  // stays reachable as its own route from the Profile screen.
+  const TAB_ROUTES = ["home", "history", "analytics"];
+  const TAB_TITLES = { home: "Home", history: "History", analytics: "Analytics" };
   const miniTopbarEl = document.getElementById("mini-topbar");
   const miniTopbarTitleEl = document.getElementById("mini-topbar-title");
+  const profileBtnEl = document.getElementById("profile-btn");
+  const fabStartEl = document.getElementById("fab-start");
   const prefersReducedMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function render() {
@@ -2081,6 +2331,8 @@
     document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.route === route));
     const isTabRoute = TAB_ROUTES.includes(route);
     document.getElementById("tabbar").style.display = isTabRoute ? "flex" : "none";
+    profileBtnEl.style.display = isTabRoute ? "flex" : "none";
+    fabStartEl.style.display = isTabRoute ? "flex" : "none";
 
     function paint() {
       switch (route) {
@@ -2089,12 +2341,15 @@
         case "analytics": renderAnalytics(); break;
         case "exercises": navigate("analytics"); break; // legacy route
         case "settings": renderSettings(); break;
+        case "profile": renderProfile(); break;
         case "routine-edit": renderRoutineEdit(params); break;
         case "workout-active": renderWorkoutActive(); break;
         case "workout-detail": renderWorkoutDetail(params); break;
         case "workout-complete": renderWorkoutComplete(params); break;
         case "exercise-detail": renderExerciseDetail(params); break;
-        case "suggested-day": renderSuggestedDay(params); break;
+        case "cardio-active": renderCardioActive(); break;
+        case "cardio-complete": renderCardioComplete(params); break;
+        case "activity-detail": renderActivityDetail(params); break;
         default: renderHome(); break;
       }
 
@@ -2234,14 +2489,14 @@
   // least one logged workout but not yet enough history (<3 sessions/28d)
   // for a load ratio; renders nothing for a brand-new, empty account.
   function homeHeroCardHtml() {
-    const last = state.workouts[0];
+    const last = allSessions()[0];
     const load = trainingLoadBalance();
     const streak = weekStreak();
     const sessions = workoutsThisWeek();
     const tiles = `
       <div class="metric-tiles">
-        <div class="metric-tile"><span class="metric-tile-dot" style="background:var(--accent);"></span><span class="metric-tile-label">Streak</span><div class="metric-tile-value">${streak} wk</div></div>
-        <div class="metric-tile"><span class="metric-tile-dot" style="background:var(--success);"></span><span class="metric-tile-label">This week</span><div class="metric-tile-value">${sessions} session${sessions === 1 ? "" : "s"}</div></div>
+        <div class="metric-tile metric-tile-tap" data-action="go-calendar"><span class="metric-tile-dot" style="background:var(--accent);"></span><span class="metric-tile-label">Streak</span><div class="metric-tile-value">${streak} wk</div></div>
+        <div class="metric-tile metric-tile-tap" data-action="history-tab" data-tab="workouts"><span class="metric-tile-dot" style="background:var(--success);"></span><span class="metric-tile-label">This week</span><div class="metric-tile-value">${sessions} session${sessions === 1 ? "" : "s"}</div></div>
       </div>
     `;
 
@@ -2254,9 +2509,9 @@
         pushing: "Pushing above your recent average.",
         spike: "Spiking — well above what you're adapted to.",
       };
-      const spark = weeklyTonnageSeries(8).map((w) => w.value);
+      const spark = weeklyLoadSeries(8).map((w) => w.value);
       return `
-        <div class="hero-card hero-card-${zone}">
+        <div class="hero-card hero-card-${zone} hero-card-tap" data-action="open-training-balance">
           <div class="hero-card-label">Training balance</div>
           <div class="hero-card-num">${load.ratio.toFixed(2)}<span class="hero-card-unit">×</span></div>
           <div class="hero-card-sub">${ZONE_SUB[zone]}</div>
@@ -2267,8 +2522,9 @@
     }
 
     if (last && typeof last.effortScore === "number") {
+      const navAction = isCardioSession(last) ? "view-activity" : "view-workout";
       return `
-        <div class="hero-card hero-card-pink">
+        <div class="hero-card hero-card-pink hero-card-tap" data-action="${navAction}" data-id="${last.id}">
           <div class="hero-card-label">Last session effort</div>
           <div class="hero-card-num">${last.effortScore}<span class="hero-card-unit">%</span></div>
           <div class="hero-card-sub">${escapeHtml(last.name)} · ${fmtDate(last.date)}</div>
@@ -2278,6 +2534,30 @@
     }
 
     return "";
+  }
+
+  // Detail sheet behind the Home hero card tap — the exact numbers behind
+  // the ratio, not just the zone caption.
+  function openTrainingBalanceSheet() {
+    const load = trainingLoadBalance();
+    if (!load) return;
+    const zone = load.ratio < 0.8 ? "easing" : load.ratio <= 1.3 ? "optimal" : load.ratio <= 1.5 ? "pushing" : "spike";
+    const ZONE_EXPLAIN = {
+      easing: "This week's training load is lighter than your recent average. Normal during a deload; worth a look if it's not intentional.",
+      optimal: "This week's load matches the 4-week average you're adapted to — the zone associated with the lowest injury risk.",
+      pushing: "This week is ramping up faster than your recent average. Productive in small doses — keep an eye on recovery.",
+      spike: "This week is well above what your body's been adapted to. The zone sports science flags for elevated injury risk.",
+    };
+    const spark = weeklyLoadSeries(8);
+    const html = `
+      <div class="info-stat-row"><span>This week's load</span><strong>${Math.round(load.acute).toLocaleString()}</strong></div>
+      <div class="info-stat-row"><span>4-week average</span><strong>${Math.round(load.chronicWeekly).toLocaleString()}</strong></div>
+      <div class="info-stat-row"><span>Ratio</span><strong>${load.ratio.toFixed(2)}×</strong></div>
+      <div class="chart-wrap" style="margin:12px 0;">${renderLineChart(spark.map((w) => ({ date: new Date(w.start).toISOString(), value: w.value })), { label: "Weekly training load" })}</div>
+      <div class="small">${ZONE_EXPLAIN[zone]}</div>
+      <div class="tiny muted" style="margin-top:10px;">Load = duration × RPE per session (Foster et al. 2001), summed across both lifting and logged activities. Ratio = this week ÷ 4-week average (Gabbett 2016 acute:chronic workload ratio); 0.8–1.3× is the sweet spot, &gt;1.5× is a spike.</div>
+    `;
+    openInfoSheet("Training balance", html);
   }
 
   function renderHome() {
@@ -2298,10 +2578,18 @@
           </div>
         </div>` : ""}
 
-      ${renderSuggestedWeekHtml()}
-      ${renderTrainingCoachHtml({ title: "Coach says", limit: 2, more: true })}
+      ${state.activeCardio ? `
+        <div class="card card-tap" data-action="resume-cardio" style="border-color:var(--accent); background:var(--accent-bg);">
+          <div class="row">
+            <div>
+              <div style="font-weight:700;">${activityTypeIcon(state.activeCardio.activityType)} ${escapeHtml(state.activeCardio.name)} in progress</div>
+              <div class="small muted">tap to resume</div>
+            </div>
+            <span class="badge badge-accent">Resume</span>
+          </div>
+        </div>` : ""}
 
-      <button class="btn btn-primary" data-action="start-empty" style="margin-bottom:16px;">+ Start empty workout</button>
+      ${renderTrainingCoachHtml({ title: "Coach says", limit: 2, more: true })}
 
       <div class="section">
         <div class="row" style="margin-bottom:8px;">
@@ -2374,11 +2662,29 @@
       return;
     }
     if (tab === "workouts") {
-      if (state.workouts.length === 0) {
-        body.innerHTML = emptyStateHtml("No workouts logged", "Finish a workout and it'll show up here.", "workouts");
+      const sessions = allSessions();
+      if (sessions.length === 0) {
+        body.innerHTML = emptyStateHtml("No workouts logged", "Finish a workout or activity and it'll show up here.", "workouts");
         return;
       }
-      body.innerHTML = state.workouts.map((w) => `
+      body.innerHTML = sessions.map((w) => {
+        const cardio = isCardioSession(w);
+        if (cardio) {
+          return `
+          <div class="card card-tap" data-action="view-activity" data-id="${w.id}">
+            <div class="row" style="gap:12px;">
+              <div style="min-width:0; flex:1;">
+                <div style="font-weight:700;">${activityTypeIcon(w.activityType)} ${escapeHtml(w.name)}</div>
+                <div class="small muted">${fmtDate(w.date)} · ${fmtDuration(w.durationSec)}</div>
+              </div>
+              <div class="row-gap">
+                <span class="badge badge-effort">${w.effortScore}% effort</span>
+                <button class="icon-btn icon-btn-trash" data-action="delete-activity" data-id="${w.id}" aria-label="Delete activity">${ICONS.trash}</button>
+              </div>
+            </div>
+          </div>`;
+        }
+        return `
         <div class="card card-tap" data-action="view-workout" data-id="${w.id}">
           <div class="row" style="gap:12px;">
             <div style="min-width:0; flex:1;">
@@ -2391,8 +2697,8 @@
               <button class="icon-btn icon-btn-trash" data-action="delete-workout" data-id="${w.id}" aria-label="Delete workout">${ICONS.trash}</button>
             </div>
           </div>
-        </div>
-      `).join("");
+        </div>`;
+      }).join("");
     } else {
       const ids = new Set();
       state.workouts.forEach((w) => w.exercises.forEach((e) => ids.add(e.exerciseId)));
@@ -2416,6 +2722,32 @@
   // Which month the History calendar shows: 0 = current, negative = past.
   let calendarMonthOffset = 0;
 
+  // Calendar day tap: straight to the session if there's exactly one,
+  // otherwise a quick-pick list (info sheet) of that day's sessions.
+  function openDaySheet(dateStr) {
+    const sessions = allSessions().filter((s) => new Date(s.date).toISOString().slice(0, 10) === dateStr);
+    if (sessions.length === 0) return;
+    if (sessions.length === 1) {
+      const s = sessions[0];
+      navigate(isCardioSession(s) ? "activity-detail" : "workout-detail", { id: s.id });
+      return;
+    }
+    const label = new Date(dateStr + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+    const rows = sessions.map((s) => {
+      const cardio = isCardioSession(s);
+      const route = cardio ? "activity-detail" : "workout-detail";
+      const sub = cardio
+        ? `${fmtDuration(s.durationSec)} · RPE ${s.rpe}/10`
+        : `${fmtDuration(s.durationSec)}${typeof s.effortScore === "number" ? ` · ${s.effortScore}% effort` : ""}`;
+      return `
+        <div class="list-row card-tap" data-nav-route="${route}" data-nav-id="${s.id}">
+          <div><div class="row-title">${cardio ? activityTypeIcon(s.activityType) + " " : ""}${escapeHtml(s.name)}</div><div class="tiny muted">${sub}</div></div>
+          <span class="muted">›</span>
+        </div>`;
+    }).join("");
+    openInfoSheet(label, rows);
+  }
+
   function renderCalendarInto(body) {
     const days = workoutDaySet();
     const volumes = dayVolumeMap();
@@ -2433,7 +2765,7 @@
       const ds = `${year}-${String(month + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
       const has = days.has(ds); if (has) monthCount++;
       const tierClass = has ? `tier-${dayVolumeTier(volumes.get(ds) || 0, maxVolume)}` : "";
-      cells += `<div class="cal-cell ${has ? "cal-active" : ""} ${tierClass} ${ds === todayStr ? "cal-today" : ""}"><span>${d}</span></div>`;
+      cells += `<div class="cal-cell ${has ? "cal-active card-tap" : ""} ${tierClass} ${ds === todayStr ? "cal-today" : ""}" ${has ? `data-action="open-day" data-date="${ds}"` : ""}><span>${d}</span></div>`;
     }
     const dow = ["M", "T", "W", "T", "F", "S", "S"].map((d) => `<div class="cal-dow">${d}</div>`).join("");
     body.innerHTML = `
@@ -2482,18 +2814,38 @@
     return out;
   }
 
+  // Weekly unified training load (see sessionLoad), oldest -> newest, for
+  // the Home hero card's sparkline — the cross-modality counterpart to
+  // weeklyTonnageSeries above (which stays strength-only/lb for the
+  // Analytics volume chart).
+  function weeklyLoadSeries(weeks = 8) {
+    const WEEK = 7 * 86400000;
+    const thisWeek = weekStartMs(Date.now());
+    const out = [];
+    for (let i = weeks - 1; i >= 0; i--) out.push({ start: thisWeek - i * WEEK, value: 0 });
+    for (const s of allSessions()) {
+      const t = weekStartMs(new Date(s.date).getTime());
+      const slot = out.find((o) => o.start === t);
+      if (slot) slot.value += sessionLoad(s);
+    }
+    return out;
+  }
+
   // Acute:chronic workload ratio — the sports-science "are you ramping too
-  // fast / detraining?" signal. Acute = last 7 days of tonnage; chronic =
-  // average weekly tonnage over the last 28 days. ~0.8–1.3 is the classic
-  // sweet spot; >1.5 is a spike (injury-risk zone), <0.8 is easing off.
+  // fast / detraining?" signal (Gabbett 2016). Acute = last 7 days of
+  // unified training load; chronic = average weekly load over the last 28
+  // days. ~0.8–1.3 is the classic sweet spot; >1.5 is a spike (injury-risk
+  // zone), <0.8 is easing off. Unified load (sessionLoad) means a heavy
+  // squat day and a hard run both count toward the same ratio.
   function trainingLoadBalance() {
     const now = Date.now();
     let acute = 0, chronic = 0, sessions28 = 0;
-    for (const w of state.workouts) {
-      const age = now - new Date(w.date).getTime();
+    for (const s of allSessions()) {
+      const age = now - new Date(s.date).getTime();
       if (age < 0) continue;
-      if (age <= 7 * 86400000) acute += volumeDisplayValue(w);
-      if (age <= 28 * 86400000) { chronic += volumeDisplayValue(w); sessions28++; }
+      const load = sessionLoad(s);
+      if (age <= 7 * 86400000) acute += load;
+      if (age <= 28 * 86400000) { chronic += load; sessions28++; }
     }
     const chronicWeekly = chronic / 4;
     if (!(chronicWeekly > 0) || sessions28 < 3) return null; // not enough history to be meaningful
@@ -2553,6 +2905,38 @@
         return { muscle: MUSCLE_LABELS[m] || m, perWeek, zone };
       })
       .sort((a, b) => b.perWeek - a.perWeek);
+  }
+
+  function openTrainingLoadSheet() {
+    const load = trainingLoadBalance();
+    if (!load) return;
+    const zone = load.ratio < 0.8 ? "easing" : load.ratio <= 1.3 ? "optimal" : load.ratio <= 1.5 ? "pushing" : "spike";
+    const ZONE_TEXT = {
+      easing: "Lighter than your recent average — fine for a deload, watch for detraining if it persists.",
+      optimal: "Matches what your body's adapted to — the lowest-injury-risk zone.",
+      pushing: "Ramping above your recent average. Productive, but keep an eye on recovery.",
+      spike: "Well above what you're adapted to. Elevated injury risk; consider pulling back.",
+    };
+    openInfoSheet("Training load", `
+      <div class="info-stat-row"><span>Acute (last 7 days)</span><strong>${Math.round(load.acute).toLocaleString()}</strong></div>
+      <div class="info-stat-row"><span>Chronic (4-week avg/wk)</span><strong>${Math.round(load.chronicWeekly).toLocaleString()}</strong></div>
+      <div class="info-stat-row"><span>Ratio</span><strong>${load.ratio.toFixed(2)}×</strong></div>
+      <div class="small" style="margin-top:8px;">${ZONE_TEXT[zone]}</div>
+      <div class="tiny muted" style="margin-top:10px;">Load = duration × RPE per session (strength sessions use effort score ÷10 as an RPE-equivalent), across both lifting and logged activities. 0.8–1.3× is the sweet spot, &gt;1.5× is a spike (Gabbett 2016).</div>
+    `);
+  }
+
+  function openMuscleStimSheet(muscleLabel) {
+    const stim = muscleStimulus();
+    const v = stim.find((x) => x.muscle === muscleLabel);
+    if (!v) return;
+    const ZONE_TEXT = { low: "Under the zone that reliably drives growth — room to add volume.", optimal: "In the growth zone (MEV–MRV).", high: "Above MRV — very high; watch recovery before adding more." };
+    openInfoSheet(muscleLabel, `
+      <div class="info-stat-row"><span>Sets / week (avg, last 4wk)</span><strong>${v.perWeek.toFixed(1)}</strong></div>
+      <div class="info-stat-row"><span>Target band (MEV–MRV)</span><strong>${STIM_MEV}–${STIM_MRV}</strong></div>
+      <div class="small" style="margin-top:8px;">${ZONE_TEXT[v.zone]}</div>
+      <div class="tiny muted" style="margin-top:10px;">Fractional sets: 1 per set where this is the target muscle, 0.5 where it's a secondary mover (Pelland et al. 2024).</div>
+    `);
   }
 
   // Mean effort-axis scores (intensity / muscle / volume, each 0-100) over
@@ -2621,10 +3005,12 @@
       const d = new Date(s.start);
       const lbl = `${d.getMonth() + 1}/${d.getDate()}`;
       return `
+        <rect x="${(padX + i * slot).toFixed(1)}" y="${padTop}" width="${slot.toFixed(1)}" height="${(baseY - padTop).toFixed(1)}"
+          fill="transparent" data-action="tonnage-bar-info" data-i="${i}" style="cursor:pointer;" />
         <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="5"
-          class="ton-bar ${isCur ? "ton-bar-cur" : ""}" style="--d:${i}" />
-        ${s.value > 0 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" class="ton-val">${fmtK(s.value)}</text>` : ""}
-        ${i % 2 === series.length % 2 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="chart-date-label">${lbl}</text>` : ""}
+          class="ton-bar ${isCur ? "ton-bar-cur" : ""}" style="--d:${i}" pointer-events="none" />
+        ${s.value > 0 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${(y - 6).toFixed(1)}" text-anchor="middle" class="ton-val" pointer-events="none">${fmtK(s.value)}</text>` : ""}
+        ${i % 2 === series.length % 2 ? `<text x="${(x + barW / 2).toFixed(1)}" y="${H - 8}" text-anchor="middle" class="chart-date-label" pointer-events="none">${lbl}</text>` : ""}
       `;
     }).join("");
     return `
@@ -2758,7 +3144,7 @@
             <h3 style="margin:0;">Training load</h3>
             <span class="badge az-zone-badge az-zone-${loadZone}">${load.ratio.toFixed(2)}× · ${loadZone}</span>
           </div>
-          <div class="card">
+          <div class="card card-tap" data-action="info-training-load">
             <div class="load-meter">
               <div class="load-band load-band-low" style="left:0; width:40%;"></div>
               <div class="load-band load-band-ok" style="left:40%; width:25%;"></div>
@@ -2768,7 +3154,7 @@
             </div>
             <div class="load-scale"><span>0</span><span>0.8</span><span>1.3</span><span>1.5</span><span>2+</span></div>
             <div class="tiny muted" style="margin-top:8px;">${LOAD_CAPTIONS[loadZone]}</div>
-            <div class="tiny muted" style="margin-top:4px;">This week ÷ 4-week average tonnage (acute : chronic workload ratio).</div>
+            <div class="tiny muted" style="margin-top:4px;">This week ÷ 4-week average training load (acute : chronic workload ratio) · tap for the numbers</div>
           </div>
         </div>
       ` : ""}
@@ -2780,7 +3166,7 @@
             ${stim.map((v) => {
               const pct = Math.min(100, (v.perWeek / 24) * 100);
               return `
-              <div class="muscle-vol-row">
+              <div class="muscle-vol-row card-tap" data-action="info-muscle-stim" data-muscle="${escapeHtml(v.muscle)}">
                 <span class="muscle-vol-name">${escapeHtml(v.muscle)}</span>
                 <span class="muscle-vol-track stim-track">
                   <span class="stim-band" style="left:${(STIM_MEV / 24) * 100}%; width:${((STIM_MRV - STIM_MEV) / 24) * 100}%;"></span>
@@ -3177,11 +3563,83 @@
   // Plate denominations offered as toggles in Settings (lb).
   const PLATE_OPTIONS_LB = [55, 45, 35, 25, 15, 10, 5, 2.5, 1.25];
 
+  // Profile photo: downscaled to a max 320px square JPEG before storage —
+  // a raw camera-roll photo as a data URL can be several MB, which is
+  // wasteful for an avatar that only ever renders at a few dozen pixels.
+  function updateProfileBtnAvatar() {
+    const img = document.getElementById("profile-btn-img");
+    const icon = document.getElementById("profile-btn-icon");
+    if (state.profilePhoto) {
+      img.src = state.profilePhoto;
+      img.classList.remove("hidden");
+      icon.classList.add("hidden");
+    } else {
+      img.classList.add("hidden");
+      icon.classList.remove("hidden");
+    }
+  }
+
+  function handleProfilePhotoFile(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const SIZE = 320;
+        const canvas = document.createElement("canvas");
+        canvas.width = SIZE; canvas.height = SIZE;
+        const ctx = canvas.getContext("2d");
+        const scale = Math.max(SIZE / img.width, SIZE / img.height);
+        const w = img.width * scale, h = img.height * scale;
+        ctx.drawImage(img, (SIZE - w) / 2, (SIZE - h) / 2, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        state.profilePhoto = dataUrl;
+        DB.kvSet("profilePhoto", dataUrl);
+        updateProfileBtnAvatar();
+        render();
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  document.getElementById("profile-photo-input").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    handleProfilePhotoFile(file);
+    e.target.value = "";
+  });
+
+  function renderProfile() {
+    const sessions = allSessions();
+    const earliest = sessions.length ? sessions.reduce((a, b) => new Date(a.date) < new Date(b.date) ? a : b) : null;
+    appEl.innerHTML = `
+      <div class="topbar"><button class="back-btn" data-action="back">‹ Back</button></div>
+      <div class="profile-avatar-row">
+        <button class="profile-avatar-big" data-action="change-photo" aria-label="Change profile photo">
+          ${state.profilePhoto ? `<img src="${state.profilePhoto}" alt="" />` : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8.5" r="3.5"/><path d="M4.5 20c1.4-3.6 4.4-5.5 7.5-5.5s6.1 1.9 7.5 5.5"/></svg>`}
+          <span class="profile-avatar-edit">${state.profilePhoto ? "Change photo" : "Add photo"}</span>
+        </button>
+      </div>
+      <div class="metric-tiles" style="margin-top:4px;">
+        <div class="metric-tile"><span class="metric-tile-dot" style="background:var(--accent);"></span><span class="metric-tile-label">Total sessions</span><div class="metric-tile-value">${sessions.length}</div></div>
+        <div class="metric-tile"><span class="metric-tile-dot" style="background:var(--success);"></span><span class="metric-tile-label">Streak</span><div class="metric-tile-value">${weekStreak()} wk</div></div>
+      </div>
+      ${earliest ? `<div class="tiny muted" style="text-align:center; margin:-4px 0 16px;">Training since ${fmtDate(earliest.date)}</div>` : ""}
+      <div class="section">
+        <div class="list-row card-tap" data-action="go-settings">
+          <div class="row-title">Settings</div>
+          <span class="muted">›</span>
+        </div>
+      </div>
+    `;
+  }
+
   function renderSettings() {
     const s = state.settings;
     const bwData = (s.bodyWeightLog || []).slice(-12).map((e) => ({ date: e.date, value: displayUnit() === "kg" ? lbToKg(e.lb) : e.lb }));
     appEl.innerHTML = `
-      <div class="topbar"><h1>Settings</h1></div>
+      <div class="topbar"><button class="back-btn" data-action="back">‹ Back</button></div>
+      <h1>Settings</h1>
 
       <div class="section">
         <h3>Units</h3>
@@ -3974,24 +4432,6 @@
       case "complete-done": navigate("home"); break;
       case "go-analytics": navigate("analytics"); break;
       case "ask-claude": copyClaudeExport(); break;
-      case "open-suggested": navigate("suggested-day", { key: t.dataset.key }); break;
-      case "start-suggested": {
-        const sw = suggestedWeek();
-        const d = sw.days.find((x) => x.key === t.dataset.key);
-        if (d) startWorkout(suggestedDayAsRoutine(sw, d));
-        break;
-      }
-      case "save-suggested": {
-        const sw = suggestedWeek();
-        const d = sw.days.find((x) => x.key === t.dataset.key);
-        if (d) {
-          const r = { ...suggestedDayAsRoutine(sw, d), id: uid(), name: d.label };
-          state.routines.push(r);
-          DB.put("routines", r);
-          showToast("Saved to your routines");
-        }
-        break;
-      }
       case "delete-workout": deleteWorkout(t.dataset.id); break;
       case "view-exercise": navigate("exercise-detail", { id: t.dataset.id }); break;
       case "history-tab": navigate("history", { tab: t.dataset.tab }); break;
@@ -4066,6 +4506,33 @@
           .then((ok) => { if (ok) discardWorkout(); });
         break;
       case "finish-workout": finishWorkout(); break;
+      case "discard-cardio":
+        showConfirm("This activity won't be saved.", { title: "Discard this activity?", danger: true, okLabel: "Discard" })
+          .then((ok) => { if (ok) discardCardioActivity(); });
+        break;
+      case "finish-cardio": openRpeSheet(); break;
+      case "resume-cardio": navigate("cardio-active"); break;
+      case "view-activity": navigate("activity-detail", { id: t.dataset.id }); break;
+      case "delete-activity":
+        showConfirm("This can't be undone.", { title: "Delete this activity?", danger: true, okLabel: "Delete" })
+          .then((ok) => { if (ok) deleteActivity(t.dataset.id); });
+        break;
+      case "go-settings": navigate("settings"); break;
+      case "change-photo": document.getElementById("profile-photo-input").click(); break;
+      case "go-calendar": navigate("history", { tab: "calendar" }); break;
+      case "open-training-balance": openTrainingBalanceSheet(); break;
+      case "info-training-load": openTrainingLoadSheet(); break;
+      case "info-muscle-stim": openMuscleStimSheet(t.dataset.muscle); break;
+      case "tonnage-bar-info": {
+        const series = weeklyTonnageSeries();
+        const s = series[parseInt(t.dataset.i, 10)];
+        if (s) {
+          const end = new Date(s.start + 6 * 86400000);
+          showToast(`${Math.round(s.value).toLocaleString()} ${unitLabel()} · week of ${fmtDate(new Date(s.start).toISOString())}–${fmtDate(end.toISOString())}`);
+        }
+        break;
+      }
+      case "open-day": openDaySheet(t.dataset.date); break;
       case "add-workout-exercise": addExerciseToActiveWorkout(); break;
       case "remove-exercise":
         state.activeWorkout.exercises.splice(parseInt(t.dataset.exidx, 10), 1);
@@ -4595,7 +5062,7 @@
   }
 
   async function exportData() {
-    const data = { settings: state.settings, customExercises: state.customExercises, routines: state.routines, workouts: state.workouts };
+    const data = { settings: state.settings, customExercises: state.customExercises, routines: state.routines, workouts: state.workouts, activities: state.activities };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -4656,18 +5123,20 @@
       showToast("That file isn't a valid Just Lift backup.");
       return;
     }
-    if (!(await showConfirm("This replaces all current routines, workouts, and custom exercises with the contents of this backup file. This can't be undone.", { title: "Restore backup?", danger: true, okLabel: "Restore" }))) return;
+    if (!(await showConfirm("This replaces all current routines, workouts, activities, and custom exercises with the contents of this backup file. This can't be undone.", { title: "Restore backup?", danger: true, okLabel: "Restore" }))) return;
 
-    await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts")]);
+    await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts"), DB.clear("activities")]);
 
     const customExercises = Array.isArray(data.customExercises) ? data.customExercises : [];
     const routines = Array.isArray(data.routines) ? data.routines : [];
     const workouts = Array.isArray(data.workouts) ? data.workouts : [];
+    const activities = Array.isArray(data.activities) ? data.activities : [];
 
     await Promise.all([
       ...customExercises.map((ex) => DB.put("exercises", ex)),
       ...routines.map((r) => DB.put("routines", r)),
       ...workouts.map((w) => DB.put("workouts", w)),
+      ...activities.map((a) => DB.put("activities", a)),
     ]);
 
     if (data.settings && typeof data.settings === "object") {
@@ -4678,6 +5147,7 @@
     state.customExercises = customExercises;
     state.routines = routines;
     state.workouts = workouts.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    state.activities = activities.slice().sort((a, b) => new Date(b.date) - new Date(a.date));
 
     await backfillEffortScores();
 
@@ -4686,13 +5156,19 @@
   }
 
   async function resetData() {
-    if (!(await showConfirm("This deletes all routines, workouts, and custom exercises.", { title: "Erase all data?", danger: true, okLabel: "Erase" }))) return;
-    await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts")]);
+    if (!(await showConfirm("This deletes all routines, workouts, activities, and custom exercises.", { title: "Erase all data?", danger: true, okLabel: "Erase" }))) return;
+    await Promise.all([DB.clear("exercises"), DB.clear("routines"), DB.clear("workouts"), DB.clear("activities")]);
     await DB.kvSet("activeWorkout", null);
+    await DB.kvSet("activeCardio", null);
+    await DB.kvSet("profilePhoto", null);
     state.customExercises = [];
     state.routines = [];
     state.workouts = [];
+    state.activities = [];
     state.activeWorkout = null;
+    state.activeCardio = null;
+    state.profilePhoto = null;
+    updateProfileBtnAvatar();
     navigate("home");
   }
 
@@ -4852,6 +5328,7 @@
 
   (async function init() {
     await loadAll();
+    updateProfileBtnAvatar();
     if (!location.hash) location.hash = "#home";
     render();
     if ("serviceWorker" in navigator) {

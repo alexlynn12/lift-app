@@ -1,7 +1,9 @@
 // IndexedDB wrapper. Exposes a global `DB` object with promise-based methods.
 const DB = (() => {
   const DB_NAME = "lift-db";
-  const DB_VERSION = 1;
+  // v2 (2026-10-22): added the "activities" store for cardio/other
+  // non-strength sessions (see ACTIVITY_TYPES in app.js).
+  const DB_VERSION = 2;
   let dbPromise = null;
 
   function open() {
@@ -18,6 +20,9 @@ const DB = (() => {
         }
         if (!db.objectStoreNames.contains("workouts")) {
           db.createObjectStore("workouts", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("activities")) {
+          db.createObjectStore("activities", { keyPath: "id" });
         }
         if (!db.objectStoreNames.contains("kv")) {
           db.createObjectStore("kv", { keyPath: "key" });

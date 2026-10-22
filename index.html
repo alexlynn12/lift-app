@@ -52,28 +52,37 @@
     </span>
     <span class="tab-label">Analytics</span>
   </button>
-  <button class="tab" data-route="settings">
-    <span class="tab-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="4" y1="6.5" x2="20" y2="6.5"/>
-        <circle cx="9.5" cy="6.5" r="2"/>
-        <line x1="4" y1="12.5" x2="20" y2="12.5"/>
-        <circle cx="15" cy="12.5" r="2"/>
-        <line x1="4" y1="18.5" x2="20" y2="18.5"/>
-        <circle cx="10.5" cy="18.5" r="2"/>
-      </svg>
-    </span>
-    <span class="tab-label">Settings</span>
-  </button>
 </nav>
 
-<!-- Collapsing large-title header for the four tab screens (Home/History/
-     Analytics/Settings): hidden until the screen's own big <h1> title has
-     scrolled mostly out of view, then fades in as a blurred mini bar —
-     shown/hidden and re-labeled per route in render(). -->
+<!-- Collapsing large-title header for the tab screens (Home/History/
+     Analytics): hidden until the screen's own big <h1> title has scrolled
+     mostly out of view, then fades in as a blurred mini bar — shown/hidden
+     and re-labeled per route in render(). -->
 <div id="mini-topbar" class="mini-topbar" data-enabled="0">
   <span class="mini-topbar-title" id="mini-topbar-title"></span>
 </div>
+
+<!-- Profile button — top-right, persistent on the tab screens. Settings
+     used to be its own bottom tab; it now lives behind this (Profile shows
+     your photo/stats and a link into the unchanged Settings screen). Shows
+     the uploaded photo once set, otherwise a plain person glyph. -->
+<button id="profile-btn" class="profile-btn" data-route="profile" aria-label="Profile">
+  <img id="profile-btn-img" class="profile-btn-img hidden" alt="" />
+  <svg id="profile-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="12" cy="8.5" r="3.5"/>
+    <path d="M4.5 20c1.4-3.6 4.4-5.5 7.5-5.5s6.1 1.9 7.5 5.5"/>
+  </svg>
+</button>
+
+<!-- Start FAB — replaces the old bottom-right Settings tab slot and the
+     Home "+ Start empty workout" button with one visually distinct (pink,
+     circular, floating) entry point into the activity picker sheet. -->
+<button id="fab-start" class="fab-start" aria-label="Start a workout or activity">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="12" y1="5" x2="12" y2="19"/>
+    <line x1="5" y1="12" x2="19" y2="12"/>
+  </svg>
+</button>
 
 <div id="rest-timer-bar" class="rest-timer-bar hidden">
   <button class="rest-timer-adjust" id="rest-minus">−15</button>
@@ -211,6 +220,54 @@
     <button class="confirm-btn confirm-btn-cancel" id="exercise-menu-close" data-sheet-dismiss style="margin-top:14px; width:100%;">Close</button>
   </div>
 </div>
+
+<!-- Activity picker — opened by the + FAB. "Strength workout" goes through
+     the existing startWorkout(null) flow; the rest start a cardio activity
+     (renderCardioActive) that ends in an RPE rating instead of sets. -->
+<div id="start-activity-sheet" class="confirm-overlay hidden">
+  <div class="confirm-card">
+    <div class="confirm-card-handle"></div>
+    <div class="confirm-title">Start</div>
+    <div class="menu-list" id="start-activity-actions">
+      <button class="menu-item" data-start="strength"><span>🏋️ Strength workout</span></button>
+      <button class="menu-item" data-start="run"><span>🏃 Run</span></button>
+      <button class="menu-item" data-start="walk"><span>🚶 Walk</span></button>
+      <button class="menu-item" data-start="bike"><span>🚴 Bike</span></button>
+      <button class="menu-item" data-start="swim"><span>🏊 Swim</span></button>
+      <button class="menu-item" data-start="pickleball"><span>🎾 Pickleball</span></button>
+      <button class="menu-item" data-start="basketball"><span>🏀 Basketball</span></button>
+      <button class="menu-item" data-start="other_cardio"><span>🔥 Other cardio</span></button>
+    </div>
+    <button class="confirm-btn confirm-btn-cancel" id="start-activity-close" data-sheet-dismiss style="margin-top:14px;">Cancel</button>
+  </div>
+</div>
+
+<!-- End-of-activity effort rating — no heart-rate data, so this self-rated
+     RPE (1-10) is the baseline the cardio effort score and unified training
+     load are built from (see sessionLoad()/saveCardioActivity() in app.js). -->
+<div id="rpe-sheet-overlay" class="confirm-overlay hidden">
+  <div class="confirm-card">
+    <div class="confirm-card-handle"></div>
+    <div class="confirm-title">How hard was it?</div>
+    <div class="tiny muted" style="margin:-6px 0 12px;">Rate of perceived exertion, 1 (very easy) to 10 (all-out).</div>
+    <div class="rpe-picker" id="rpe-picker"></div>
+    <button class="confirm-btn confirm-btn-cancel" id="rpe-sheet-cancel" data-sheet-dismiss style="margin-top:14px;">Cancel</button>
+  </div>
+</div>
+
+<!-- Generic read-only detail sheet — the shared "tap a box, see more"
+     surface for the hero card, training-load, muscle-stimulus and other
+     stat boxes across Home/Analytics/History. -->
+<div id="info-sheet-overlay" class="confirm-overlay hidden">
+  <div class="confirm-card">
+    <div class="confirm-card-handle"></div>
+    <div class="confirm-title" id="info-sheet-title"></div>
+    <div class="info-sheet-body" id="info-sheet-body"></div>
+    <button class="confirm-btn confirm-btn-cancel" id="info-sheet-close" data-sheet-dismiss style="margin-top:14px;">Close</button>
+  </div>
+</div>
+
+<input type="file" id="profile-photo-input" accept="image/*" style="display:none;" />
 
 <script src="db.js"></script>
 <script src="exercises-data.js"></script>
